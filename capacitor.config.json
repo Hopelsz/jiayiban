@@ -1,0 +1,8 @@
+{
+  "appId": "com.jiayiban.app",
+  "appName": "加班记",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  }
+}

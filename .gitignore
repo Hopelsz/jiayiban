@@ -1,0 +1,27 @@
+# Node
+node_modules/
+
+# Capacitor web 资源副本（可由 npx cap sync android 重新生成）
+www/
+
+# Android 构建产物
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+android/capacitor-android/build/
+android/local.properties
+android/app/src/main/assets/public/
+
+# ⚠️ 签名文件（含密码，切勿上传！请单独备份）
+android/jiayiban-release.keystore
+android/key.properties
+
+# APK 安装包
+*.apk
+
+# IDE / 系统
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
