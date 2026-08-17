@@ -396,10 +396,12 @@
     const sal = Calc.monthSalary(year, mon, recs, settings);
     const sum = sal.sum;
 
+    const total = sal.total;
+
     $('#headerTitle').textContent = '工资计算';
     $('#headerSub').textContent = year + '年' + (mon + 1) + '月';
 
-    const extra = sal.total - settings.baseSalary;
+    const extra = total - settings.baseSalary;
     let breakdown = '<span>底薪 ¥' + Calc.fmtMoney(settings.baseSalary) + '</span>';
     if (extra >= 0) breakdown += '<span>含加班补贴 ¥' + Calc.fmtMoney(extra) + '</span>';
 
@@ -421,7 +423,7 @@
 
         '<div class="salary-hero">' +
           '<div class="cap">本月预估工资（税前）</div>' +
-          '<div class="amount">¥' + Calc.fmtMoney(sal.total) + '</div>' +
+          '<div class="amount">¥' + Calc.fmtMoney(total) + '</div>' +
           '<div class="breakdown">' + breakdown + '</div>' +
         '</div>' +
 
@@ -437,7 +439,7 @@
         '<div class="card">' +
           '<div class="card-title">薪资明细</div>' +
           feeRows +
-          '<div class="fee-total"><span class="name">应发合计</span><span class="val">¥' + Calc.fmtMoney(sal.total) + '</span></div>' +
+          '<div class="fee-total"><span class="name">应发合计</span><span class="val">¥' + Calc.fmtMoney(total) + '</span></div>' +
         '</div>' +
 
         '<div class="card">' +
@@ -448,7 +450,8 @@
             '<b>周末加班</b>按 ' + Calc.fmtMoney(settings.otRateWeekend) + ' 倍计，<br/>' +
             '<b>节假日加班</b>按 ' + Calc.fmtMoney(settings.otRateHoliday) + ' 倍计。<br/>' +
             '正常班工时超出每天 ' + settings.workHoursPerDay + ' 小时的部分并入平时加班。<br/>' +
-            '请假按小时扣款：时薪 × 请假小时，满 ' + settings.workHoursPerDay + ' 小时按一天扣（相当于日薪），未满部分按小时扣。' +
+            '请假按小时扣款：时薪 × 请假小时，满 ' + settings.workHoursPerDay + ' 小时按一天扣（相当于日薪），未满部分按小时扣。<br/>' +
+            '扣款分两种：「每月固定」每月都扣，「仅当月」只在所选月份扣一次（如迟到罚款）。' +
             ((settings.allowances || []).some((a) => a && a.unit === 'bonus' && (Number(a.amount) || 0) > 0) && sum.fullAttendance ? '<br/>本月已达全勤，全勤奖已计入。' : '') +
             '<br/>工时为估算，实际以工厂结算为准。' +
           '</div>' +
@@ -475,7 +478,8 @@
       day: '按出勤天数',
       night: '按夜班天数',
       bonus: '全勤达标发放',
-      month: '每月固定'
+      month: '每月固定',
+      once: '仅当月'
     };
     /* 补贴 / 扣款列表渲染（kind: allowance | deduction） */
     const renderList = (list, kind) => {
@@ -483,7 +487,9 @@
       const html = (list || []).map((al, i) => {
         const n = ((al && al.name) || '').trim() || (isD ? '扣款' : '补贴');
         const amt = Number(al && al.amount) || 0;
-        const u = UNIT_LABEL[(al && al.unit) || 'month'] || '每月固定';
+        const u0 = (al && al.unit) || 'month';
+        let u = UNIT_LABEL[u0] || '每月固定';
+        if (isD && u0 === 'once') u += '（' + ((al && al.appliedMonth) || '未设月份') + '）';
         const pref = isD ? '-' : '';
         return '<div class="allow-item' + (isD ? ' deduct' : '') + '">' +
           '<div class="ai-info">' +
@@ -499,7 +505,7 @@
           '</div>' +
         '</div>';
       }).join('');
-      return html || '<div class="empty-tip">' + (isD ? '暂无扣款项，如社保代扣、罚款等' : '暂无补贴') + '</div>';
+      return html || '<div class="empty-tip">' + (isD ? '暂无扣款项，如社保代扣、公积金' : '暂无补贴') + '</div>';
     };
 
     $('#appMain').innerHTML =
@@ -567,10 +573,10 @@
     { id: 'bonus', name: '全勤达标' },
     { id: 'month', name: '每月固定' }
   ];
+  /* 扣款计算方式：每月固定（每月都扣）| 仅当月（只在所选月份扣一次，如迟到罚款） */
   const DEDUCT_UNIT_OPTIONS = [
-    { id: 'day', name: '按出勤天数' },
-    { id: 'night', name: '按夜班天数' },
-    { id: 'month', name: '每月固定' }
+    { id: 'month', name: '每月固定' },
+    { id: 'once', name: '仅当月' }
   ];
   function openCaModal(index, kind) {
     caEditingIndex = (typeof index === 'number' && index >= 0) ? index : -1;
@@ -578,17 +584,20 @@
     const isD = caEditingKind === 'deduction';
     const list = Store.getSettings()[isD ? 'deductions' : 'allowances'] || [];
     const ca = caEditingIndex >= 0 && caEditingIndex < list.length ? list[caEditingIndex] : null;
-    caEditingUnit = (ca && ca.unit) || 'month';
-    const opts = isD ? DEDUCT_UNIT_OPTIONS : UNIT_OPTIONS;
-    const unitChips = opts.map((u) =>
+    let u0 = (ca && ca.unit) || 'month';
+    if (isD && u0 !== 'once') u0 = 'month';   // 扣款只允许 每月固定 / 仅当月
+    caEditingUnit = u0;
+    const unitOptions = isD ? DEDUCT_UNIT_OPTIONS : UNIT_OPTIONS;
+    const unitChips = unitOptions.map((u) =>
       '<button type="button" class="ca-unit-chip' + (u.id === caEditingUnit ? ' active' : '') + '" data-ca-unit="' + u.id + '">' + u.name + '</button>'
     ).join('');
+    const appliedMonth = (ca && ca.appliedMonth) || Store.toMonthStr(new Date());
     const title = ca ? (isD ? '编辑扣款' : '编辑补贴') : (isD ? '添加扣款' : '添加补贴');
     openModal(
       '<div class="m-title">' + title + '<button class="m-close" data-close>✕</button></div>' +
       '<div class="field-row">' +
         '<label>' + (isD ? '扣款名称' : '补贴名称') + '</label>' +
-        '<input class="field-input" type="text" data-field="caName" placeholder="' + (isD ? '如：社保代扣、罚款' : '如：餐补、住房补贴') + '" value="' + esc((ca && ca.name) || '') + '" />' +
+        '<input class="field-input" type="text" data-field="caName" placeholder="' + (isD ? '如：社保代扣、公积金' : '如：餐补、住房补贴') + '" value="' + esc((ca && ca.name) || '') + '" />' +
       '</div>' +
       '<div class="field-row">' +
         '<label>' + (isD ? '扣款金额（元）' : '补贴金额（元）') + '</label>' +
@@ -598,6 +607,13 @@
         '<label>计算方式</label>' +
         '<div class="ca-unit-row">' + unitChips + '</div>' +
       '</div>' +
+      (isD
+        ? '<div class="field-row ca-once-row" id="caOnceRow"' + (caEditingUnit === 'once' ? '' : ' hidden') + ' style="margin-top:10px;">' +
+            '<label>生效月份（仅当月）</label>' +
+            '<input class="field-input" type="month" data-field="caAppliedMonth" value="' + appliedMonth + '" />' +
+          '</div>' +
+          '<div class="ca-hint">每月固定：每月都扣（如社保/公积金/个税）；仅当月：只在所选月份扣一次（如迟到罚款）。</div>'
+        : '') +
       '<div class="m-foot">' +
         '<button class="btn btn-ghost-2" data-close>取消</button>' +
         '<button class="btn btn-primary" data-ca-save>保存</button>' +
@@ -682,9 +698,10 @@
     const month = state.salMonth;
     const p = month.split('-');
     const sal = Calc.monthSalary(parseInt(p[0], 10), parseInt(p[1], 10) - 1, Store.getRecords(), Store.getSettings());
+    const total = sal.total;
     const lines = [
       '【' + parseInt(p[0], 10) + '年' + parseInt(p[1], 10) + '月工资单】',
-      '应发合计：¥' + Calc.fmtMoney(sal.total),
+      '应发合计：¥' + Calc.fmtMoney(total),
       '--明细--',
       ...sal.items.map((it) => it.name + '：¥' + Calc.fmtMoney(it.value) + '（' + it.detail + '）')
     ];
@@ -817,6 +834,9 @@
       if (caUnit) {
         caEditingUnit = caUnit.dataset.caUnit;
         $$('[data-ca-unit]').forEach((b) => b.classList.toggle('active', b === caUnit));
+        // 扣款选"仅当月"时显示生效月份，选"每月固定"时隐藏
+        const onceRow = $('#caOnceRow', $('#modalBox'));
+        if (onceRow) onceRow.hidden = caEditingUnit !== 'once';
         return;
       }
       const caSave = e.target.closest('[data-ca-save]');
@@ -824,8 +844,12 @@
         const name = $('[data-field="caName"]', $('#modalBox')).value.trim();
         const amount = parseFloat($('[data-field="caAmount"]', $('#modalBox')).value);
         const isD = caEditingKind === 'deduction';
+        const unit = caEditingUnit || 'month';
+        const item = { name: name, amount: isNaN(amount) ? 0 : amount, unit: unit };
+        if (unit === 'once') {
+          item.appliedMonth = $('[data-field="caAppliedMonth"]', $('#modalBox')).value || Store.toMonthStr(new Date());
+        }
         const list = (Store.getSettings()[isD ? 'deductions' : 'allowances'] || []).slice();
-        const item = { name: name, amount: isNaN(amount) ? 0 : amount, unit: caEditingUnit || 'month' };
         if (caEditingIndex >= 0 && caEditingIndex < list.length) list[caEditingIndex] = item;
         else list.push(item);
         Store.setSettings(isD ? { deductions: list } : { allowances: list });

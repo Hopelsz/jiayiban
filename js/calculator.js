@@ -143,25 +143,17 @@
       items.push({ key: 'allowance:' + i, name: name, detail: detail, value: value });
     });
 
-    // 扣款项：day 按出勤天数、night 按夜班天数、month 每月固定；从工资中扣除（值为负）
+    // 扣款：month 每月固定（如社保/公积金/个税）；once 仅当月（如迟到罚款，只在所选月份扣一次）
+    const monthStr = year + '-' + String(month + 1).padStart(2, '0');
     (settings.deductions || []).forEach((dl, i) => {
       const amount = Number(dl && dl.amount) || 0;
       if (amount <= 0) return;
       const unit = (dl && dl.unit) || 'month';
+      const appliedMonth = (dl && dl.appliedMonth) || '';
+      if (unit === 'once' && appliedMonth !== monthStr) return;
       const name = ((dl && dl.name) || '').trim() || '扣款';
-      let value = 0;
-      let detail = '';
-      if (unit === 'day') {
-        value = amount * sum.workDays;
-        detail = amount + ' 元/天 × 出勤 ' + sum.workDays + ' 天';
-      } else if (unit === 'night') {
-        value = amount * sum.nightDays;
-        detail = amount + ' 元/天 × 夜班 ' + sum.nightDays + ' 天';
-      } else {
-        value = amount;
-        detail = '每月固定扣款';
-      }
-      items.push({ key: 'deduct:' + i, name: name, detail: detail, value: -value });
+      const detail = unit === 'once' ? '仅当月扣款（' + appliedMonth + '）' : '每月固定扣款';
+      items.push({ key: 'deduct:' + i, name: name, detail: detail, value: -amount });
     });
 
     /* 请假扣款：整天按日薪扣（8小时为一天），零头按时薪扣；两者合计 = 时薪 × 请假总小时 */

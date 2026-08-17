@@ -318,6 +318,19 @@ input, textarea { -webkit-user-select: text; user-select: text; }
   min-width: 90px;
 }
 .ca-unit-chip.active { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
+/* 扣款弹窗说明（每月固定 / 仅当月） */
+.ca-hint {
+  font-size: 12px;
+  color: var(--text-3);
+  background: var(--primary-light);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 12px;
+  line-height: 1.6;
+}
+.ca-hint b { color: var(--primary); }
+/* 扣款"仅当月"的生效月份输入行（选中"仅当月"时显示） */
+.field-row[hidden] { display: none; }
 
 /* ===== 半小时步进器 ===== */
 .stepper { display: flex; align-items: stretch; gap: 8px; }

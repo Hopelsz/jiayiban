@@ -32,7 +32,7 @@
     otRateHoliday: 3.0,        // 节假日加班倍率
     allowances: defaultAllowances(),  // 补贴列表 [{ name, amount, unit }] unit: day|night|bonus|month
     allowancesDefaultsAdded: true,    // 默认补贴是否已就位；老数据首次迁移补默认后置 true，避免删除后又出现
-    deductions: defaultDeductions(),  // 扣款项列表 [{ name, amount, unit }] unit: day|night|month
+    deductions: defaultDeductions(),  // 扣款项列表 [{ name, amount, unit, appliedMonth }] unit: month(每月固定) | once(仅当月)
     deductionsDefaultsAdded: true,    // 默认扣款项是否已就位；老数据首次迁移补默认后置 true，避免删除后又出现
     lastSavedMonth: '',        // 上次浏览的月份 YYYY-MM
   };
@@ -175,6 +175,7 @@
         });
         db.records = recs;
         migrateAllowances(db.settings);
+        migrateFinesToDeductions(db.settings, parsed.fines);   // 旧版"当月罚款"迁移为"仅当月"扣款
       } else {
         db = { settings: Object.assign({}, DEFAULT_SETTINGS), records: {} };
       }
@@ -277,6 +278,7 @@
       db.settings.deductionsDefaultsAdded = false;
     }
     migrateAllowances(db.settings);
+    migrateFinesToDeductions(db.settings, parsed.fines);   // 旧版"当月罚款"迁移为"仅当月"扣款
     Object.keys(parsed.records || {}).forEach((k) => {
       if (/^\d{4}-\d{2}-\d{2}$/.test(k)) db.records[k] = normalizeRecord(parsed.records[k]);
     });
@@ -286,6 +288,23 @@
   function clearAll() {
     db = { settings: Object.assign({}, DEFAULT_SETTINGS), records: {} };
     save();
+  }
+
+  /* 旧版"当月罚款"（fines）迁移为"仅当月"扣款（unit:'once' + appliedMonth），避免老数据丢失 */
+  function migrateFinesToDeductions(settings, fines) {
+    if (!fines || typeof fines !== 'object') return;
+    Object.keys(fines).forEach((m) => {
+      (fines[m] || []).forEach((f) => {
+        const amount = Number(f && f.amount) || 0;
+        if (amount <= 0) return;
+        settings.deductions.push({
+          name: ((f && f.name) || '').trim() || '罚款',
+          amount: amount,
+          unit: 'once',
+          appliedMonth: m
+        });
+      });
+    });
   }
 
   window.Store = {
