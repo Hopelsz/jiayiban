@@ -2,12 +2,9 @@
 (function () {
   'use strict';
 
-  /* 工时取整：分钟 -> 小时 */
-  function roundHours(minutes, mode) {
-    let m = Math.max(0, minutes);
-    if (mode === 'quarter') m = Math.floor(m / 15) * 15;
-    else if (mode === 'half') m = Math.floor(m / 30) * 30;
-    return Math.round((m / 60) * 100) / 100;
+  /* 分钟 -> 小时（保留两位小数） */
+  function roundHours(minutes) {
+    return Math.round((Math.max(0, minutes) / 60) * 100) / 100;
   }
 
   function roundMoney(v) {
@@ -46,14 +43,13 @@
     return { work, ot, total: work + ot };
   }
 
-  /* 单日拆分为: normal / weekdayOt / weekend / holiday 分钟数 */
+  /* 单日拆分: weekdayOt / weekend / holiday 分钟数 */
   function daySplit(rec, settings) {
     const { work, ot } = dayMinutes(rec);
     const type = resolveDayType(rec);
     const standard = settings.workHoursPerDay * 60;
-    const out = { normal: 0, weekdayOt: 0, weekend: 0, holiday: 0 };
+    const out = { weekdayOt: 0, weekend: 0, holiday: 0 };
     if (type === 'weekday') {
-      out.normal = Math.min(work, standard);
       out.weekdayOt = ot + Math.max(0, work - standard);
     } else if (type === 'weekend') {
       out.weekend = work + ot;
@@ -78,7 +74,6 @@
       weekdayOtHours: 0,
       weekendHours: 0,
       holidayHours: 0,
-      totalHours: 0,
       leaveHoursSum: 0,
       weekdaysInMonth: 0
     };
@@ -90,17 +85,16 @@
         if (rec.shift === 'night') s.nightDays += 1;
         // 正常工时 = 每天正常班（不超过每日标准工时）总和，不区分周几、不包含加班
         const mins = dayMinutes(rec);
-        s.normalHours += roundHours(Math.min(mins.work, settings.workHoursPerDay * 60), settings.roundMode);
-        s.weekdayOtHours += roundHours(split.weekdayOt, settings.roundMode);
-        s.weekendHours += roundHours(split.weekend, settings.roundMode);
-        s.holidayHours += roundHours(split.holiday, settings.roundMode);
+        s.normalHours += roundHours(Math.min(mins.work, settings.workHoursPerDay * 60));
+        s.weekdayOtHours += roundHours(split.weekdayOt);
+        s.weekendHours += roundHours(split.weekend);
+        s.holidayHours += roundHours(split.holiday);
       }
       if (rec && rec.shift === 'leave') {
         s.leaveHoursSum += Math.max(0, Number(rec.leaveHours) || 0);
       }
       if (!isWeekend(ds)) s.weekdaysInMonth += 1;
     });
-    s.totalHours = roundMoney(s.normalHours + s.weekdayOtHours + s.weekendHours + s.holidayHours);
     s.fullAttendance = s.workDays >= s.weekdaysInMonth && s.workDays > 0;
     return s;
   }
@@ -149,6 +143,27 @@
       items.push({ key: 'allowance:' + i, name: name, detail: detail, value: value });
     });
 
+    // 扣款项：day 按出勤天数、night 按夜班天数、month 每月固定；从工资中扣除（值为负）
+    (settings.deductions || []).forEach((dl, i) => {
+      const amount = Number(dl && dl.amount) || 0;
+      if (amount <= 0) return;
+      const unit = (dl && dl.unit) || 'month';
+      const name = ((dl && dl.name) || '').trim() || '扣款';
+      let value = 0;
+      let detail = '';
+      if (unit === 'day') {
+        value = amount * sum.workDays;
+        detail = amount + ' 元/天 × 出勤 ' + sum.workDays + ' 天';
+      } else if (unit === 'night') {
+        value = amount * sum.nightDays;
+        detail = amount + ' 元/天 × 夜班 ' + sum.nightDays + ' 天';
+      } else {
+        value = amount;
+        detail = '每月固定扣款';
+      }
+      items.push({ key: 'deduct:' + i, name: name, detail: detail, value: -value });
+    });
+
     /* 请假扣款：整天按日薪扣（8小时为一天），零头按时薪扣；两者合计 = 时薪 × 请假总小时 */
     const leaveH = sum.leaveHoursSum;
     if (leaveH > 0) {
@@ -170,41 +185,12 @@
       sum,
       hourlyRate,
       items,
-      subTotal,
       total: roundMoney(subTotal)
     };
   }
 
-  /* 导出 CSV 文本（当月明细） */
-  function monthCsv(year, month, recs, settings) {
-    const days = Store.daysOfMonth(year, month);
-    const lines = [];
-    lines.push('日期,星期,类型,班次,正常工时(时),加班工时(时),请假(时),备注');
-    days.forEach((ds) => {
-      const rec = recs[ds];
-      if (!rec) return;
-      const isNoWork = rec.shift === 'rest' || rec.shift === 'leave';
-      if (!hasAnyTime(rec) && !isNoWork) return;
-      const type = resolveDayType(Object.assign({ date: ds }, rec));
-      const typeName = { weekday: '平时', weekend: '周末', holiday: '节假日' }[type] || type;
-      const mins = dayMinutes(rec);
-      lines.push([
-        ds,
-        weekdayName(ds),
-        typeName,
-        { day: '白班', night: '夜班', rest: '休息', leave: '请假' }[rec.shift] || '白班',
-        roundHours(mins.work, settings.roundMode),
-        roundHours(mins.ot, settings.roundMode),
-        Math.max(0, Number(rec.leaveHours) || 0),
-        (rec.note || '').replace(/,/g, '，')
-      ].join(','));
-    });
-    return lines.join('\n');
-  }
-
   window.Calc = {
     roundHours,
-    roundMoney,
     fmtMoney,
     resolveDayType,
     isWeekend,
@@ -213,7 +199,6 @@
     daySplit,
     hasAnyTime,
     monthSummary,
-    monthSalary,
-    monthCsv
+    monthSalary
   };
 })();

@@ -208,7 +208,7 @@
     const trec = recs[cardDay];
     if (trec && Calc.hasAnyTime(trec)) {
       const split = Calc.daySplit(Object.assign({ date: cardDay }, trec), settings);
-      const h = (m) => Calc.roundHours(m, settings.roundMode);
+      const h = Calc.roundHours;
       todayOtPay = salary.hourlyRate * (
         settings.otRateWeekday * h(split.weekdayOt) +
         settings.otRateWeekend * h(split.weekend) +
@@ -265,7 +265,7 @@
           }
         } else {
           const mins = Calc.dayMinutes(rec);
-          const otH = Calc.roundHours(mins.ot, settings.roundMode);
+          const otH = Calc.roundHours(mins.ot);
           const type = Calc.resolveDayType(Object.assign({ date: ds }, rec));
           info =
             (rec.shift === 'night' ? '<span class="ot-night">夜</span>' : '') +
@@ -281,7 +281,7 @@
     });
 
     $('#appMain').innerHTML =
-      '<div class="tab-panel">' +
+      '<div class="tab-panel fill">' +
         '<div class="today-card">' + todayCard + '</div>' +
 
         '<div class="month-nav">' +
@@ -291,7 +291,7 @@
           '<button type="button" class="btn-today" data-go-today>今天</button>' +
         '</div>' +
 
-        '<div class="card">' +
+        '<div class="card cal-card">' +
           '<div class="cal-head">' + head + '</div>' +
           '<div class="cal-grid">' + cells + '</div>' +
         '</div>' +
@@ -477,21 +477,30 @@
       bonus: '全勤达标发放',
       month: '每月固定'
     };
-    const caList = (s.allowances || []).map((al, i) => {
-      const caN = ((al && al.name) || '').trim() || '补贴';
-      const caA = Number(al && al.amount) || 0;
-      const caU = UNIT_LABEL[(al && al.unit) || 'month'] || '每月固定';
-      return '<div class="allow-item">' +
-        '<div class="ai-info">' +
-          '<div class="ai-name">' + esc(caN) + '</div>' +
-          '<div class="ai-amt">¥' + caA + ' · ' + esc(caU) + '</div>' +
-        '</div>' +
-        '<div class="ai-ops">' +
-          '<button class="allow-op" data-ca-edit="' + i + '">编辑</button>' +
-          '<button class="allow-op del" data-ca-del="' + i + '">删除</button>' +
-        '</div>' +
-      '</div>';
-    }).join('');
+    /* 补贴 / 扣款列表渲染（kind: allowance | deduction） */
+    const renderList = (list, kind) => {
+      const isD = kind === 'deduction';
+      const html = (list || []).map((al, i) => {
+        const n = ((al && al.name) || '').trim() || (isD ? '扣款' : '补贴');
+        const amt = Number(al && al.amount) || 0;
+        const u = UNIT_LABEL[(al && al.unit) || 'month'] || '每月固定';
+        const pref = isD ? '-' : '';
+        return '<div class="allow-item' + (isD ? ' deduct' : '') + '">' +
+          '<div class="ai-info">' +
+            '<div class="ai-name">' + esc(n) + '</div>' +
+            '<div class="ai-amt">' + pref + '¥' + amt + ' · ' + esc(u) + '</div>' +
+          '</div>' +
+          '<div class="ai-ops">' +
+            (isD
+              ? '<button class="allow-op" data-dc-edit="' + i + '">编辑</button>' +
+                '<button class="allow-op del" data-dc-del="' + i + '">删除</button>'
+              : '<button class="allow-op" data-ca-edit="' + i + '">编辑</button>' +
+                '<button class="allow-op del" data-ca-del="' + i + '">删除</button>') +
+          '</div>' +
+        '</div>';
+      }).join('');
+      return html || '<div class="empty-tip">' + (isD ? '暂无扣款项，如社保代扣、罚款等' : '暂无补贴') + '</div>';
+    };
 
     $('#appMain').innerHTML =
       '<div class="tab-panel">' +
@@ -516,8 +525,14 @@
 
         '<div class="card">' +
           '<div class="card-title">补贴</div>' +
-          '<div class="allow-list">' + caList + '</div>' +
+          '<div class="allow-list">' + renderList(s.allowances, 'allowance') + '</div>' +
           '<button class="allowance-add-btn" data-ca-add>＋ 添加补贴</button>' +
+        '</div>' +
+
+        '<div class="card">' +
+          '<div class="card-title">扣款项</div>' +
+          '<div class="allow-list">' + renderList(s.deductions, 'deduction') + '</div>' +
+          '<button class="allowance-add-btn" data-dc-add>＋ 添加扣款</button>' +
         '</div>' +
 
         '<div class="card">' +
@@ -542,31 +557,41 @@
       '</div>';
   }
 
-  /* 打开补贴编辑弹窗（index 为 -1/undefined 时新增） */
+  /* 打开补贴 / 扣款编辑弹窗（index 为 -1/undefined 时新增；kind: allowance | deduction） */
   let caEditingIndex = -1;
   let caEditingUnit = 'month';
+  let caEditingKind = 'allowance';
   const UNIT_OPTIONS = [
     { id: 'day', name: '按出勤天数' },
     { id: 'night', name: '按夜班天数' },
     { id: 'bonus', name: '全勤达标' },
     { id: 'month', name: '每月固定' }
   ];
-  function openCaModal(index) {
+  const DEDUCT_UNIT_OPTIONS = [
+    { id: 'day', name: '按出勤天数' },
+    { id: 'night', name: '按夜班天数' },
+    { id: 'month', name: '每月固定' }
+  ];
+  function openCaModal(index, kind) {
     caEditingIndex = (typeof index === 'number' && index >= 0) ? index : -1;
-    const cas = Store.getSettings().allowances || [];
-    const ca = caEditingIndex >= 0 && caEditingIndex < cas.length ? cas[caEditingIndex] : null;
+    caEditingKind = kind === 'deduction' ? 'deduction' : 'allowance';
+    const isD = caEditingKind === 'deduction';
+    const list = Store.getSettings()[isD ? 'deductions' : 'allowances'] || [];
+    const ca = caEditingIndex >= 0 && caEditingIndex < list.length ? list[caEditingIndex] : null;
     caEditingUnit = (ca && ca.unit) || 'month';
-    const unitChips = UNIT_OPTIONS.map((u) =>
+    const opts = isD ? DEDUCT_UNIT_OPTIONS : UNIT_OPTIONS;
+    const unitChips = opts.map((u) =>
       '<button type="button" class="ca-unit-chip' + (u.id === caEditingUnit ? ' active' : '') + '" data-ca-unit="' + u.id + '">' + u.name + '</button>'
     ).join('');
+    const title = ca ? (isD ? '编辑扣款' : '编辑补贴') : (isD ? '添加扣款' : '添加补贴');
     openModal(
-      '<div class="m-title">' + (ca ? '编辑补贴' : '添加补贴') + '<button class="m-close" data-close>✕</button></div>' +
+      '<div class="m-title">' + title + '<button class="m-close" data-close>✕</button></div>' +
       '<div class="field-row">' +
-        '<label>补贴名称</label>' +
-        '<input class="field-input" type="text" data-field="caName" placeholder="如：餐补、住房补贴" value="' + esc((ca && ca.name) || '') + '" />' +
+        '<label>' + (isD ? '扣款名称' : '补贴名称') + '</label>' +
+        '<input class="field-input" type="text" data-field="caName" placeholder="' + (isD ? '如：社保代扣、罚款' : '如：餐补、住房补贴') + '" value="' + esc((ca && ca.name) || '') + '" />' +
       '</div>' +
       '<div class="field-row">' +
-        '<label>补贴金额（元）</label>' +
+        '<label>' + (isD ? '扣款金额（元）' : '补贴金额（元）') + '</label>' +
         '<input class="field-input" type="number" inputmode="decimal" step="0.01" min="0" data-field="caAmount" value="' + ((ca && Number(ca.amount)) || '') + '" placeholder="0 = 无" />' +
       '</div>' +
       '<div class="field-row" style="margin-bottom:0;">' +
@@ -581,11 +606,16 @@
     );
   }
 
+  /* 各数值字段的最小值，防止 0/负数导致时薪为 0 或 Infinity */
+  const SETTING_MIN = { baseSalary: 0.01, calcDays: 1, workHoursPerDay: 1, otRateWeekday: 1, otRateWeekend: 1, otRateHoliday: 1 };
   function saveSettingsFromForm() {
     const s = {};
     $$('#appMain [data-set]').forEach((inp) => {
-      const v = parseFloat(inp.value);
-      s[inp.dataset.set] = isNaN(v) ? 0 : v;
+      let v = parseFloat(inp.value);
+      if (isNaN(v)) v = 0;
+      const min = SETTING_MIN[inp.dataset.set];
+      if (min !== undefined && v < min) v = min;
+      s[inp.dataset.set] = v;
     });
     Store.setSettings(s);
     toast('设置已保存');
@@ -623,6 +653,57 @@
     input.click();
   }
 
+  /* 导出当月工资明细 CSV */
+  function exportCsv() {
+    const month = state.salMonth;
+    const recs = Store.getRecords();
+    const days = Object.keys(recs).filter((d) => d.indexOf(month) === 0).sort();
+    const TYPE = { weekday: '平时', weekend: '周末', holiday: '节假日', auto: '自动' };
+    const SHIFT = { day: '白班', night: '夜班', rest: '休息', leave: '请假' };
+    const rows = [['日期', '类型', '班次', '工时(时)', '加班(时)', '请假(时)', '备注']];
+    days.forEach((d) => {
+      const r = recs[d];
+      const w = Number(r.workHours) || 0, o = Number(r.otHours) || 0, l = Number(r.leaveHours) || 0;
+      rows.push([d, TYPE[r.dayType] || r.dayType || '', SHIFT[r.shift] || r.shift || '',
+        w ? w : '', o ? o : '', l ? l : '', r.note || '']);
+    });
+    const csvEsc = (v) => { const s = String(v == null ? '' : v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const blob = new Blob(['\uFEFF' + rows.map((r) => r.map(csvEsc).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '加班明细_' + month + '.csv';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('明细已导出');
+  }
+
+  /* 复制当月工资单文本到剪贴板 */
+  function copySummary() {
+    const month = state.salMonth;
+    const p = month.split('-');
+    const sal = Calc.monthSalary(parseInt(p[0], 10), parseInt(p[1], 10) - 1, Store.getRecords(), Store.getSettings());
+    const lines = [
+      '【' + parseInt(p[0], 10) + '年' + parseInt(p[1], 10) + '月工资单】',
+      '应发合计：¥' + Calc.fmtMoney(sal.total),
+      '--明细--',
+      ...sal.items.map((it) => it.name + '：¥' + Calc.fmtMoney(it.value) + '（' + it.detail + '）')
+    ];
+    const text = lines.join('\n');
+    const done = () => toast('工资单已复制');
+    const fallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); done(); } catch (e) { toast('复制失败，请长按手动复制'); }
+      document.body.removeChild(ta);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(fallback);
+    } else fallback();
+  }
+
   /* ================= 渲染入口 ================= */
   function render() {
     if (state.tab === 'records') renderRecords();
@@ -630,11 +711,38 @@
     else renderSettings();
   }
 
+  const TAB_ORDER = ['records', 'salary', 'settings'];
+
+  /* 切页动画：旧面板按方向滑出 → 渲染新面板 → 新面板从反方向滑入 */
   function switchTab(tab) {
+    if (state.tab === tab) return;
+    const dir = TAB_ORDER.indexOf(tab) > TAB_ORDER.indexOf(state.tab) ? 1 : -1;
     state.tab = tab;
     $$('.tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-    window.scrollTo(0, 0);   // 切页回到顶部，避免保留原滚动位置产生跳动
-    render();
+    const panel = $('#appMain').firstElementChild;
+    const finish = () => {
+      $('#appMain').scrollTop = 0;   // 切页回到顶部，避免保留原滚动位置产生跳动
+      render();
+      const np = $('#appMain').firstElementChild;
+      if (np && np.classList.contains('tab-panel')) {
+        np.style.setProperty('--in-x', dir * 24 + 'px');
+        np.classList.add('panel-enter');
+      }
+    };
+    if (panel && panel.classList.contains('tab-panel') && !panel._switching) {
+      panel._switching = true;
+      panel.style.setProperty('--out-x', -dir * 24 + 'px');
+      panel.classList.remove('panel-enter');   // 清掉残留类，确保动画每次都能重新触发
+      void panel.offsetWidth;                 // 强制 reflow，让动画类生效
+      panel.classList.add('panel-leave');
+      setTimeout(() => {
+        panel.classList.remove('panel-leave');
+        panel._switching = false;
+        finish();
+      }, 130);   // 与 CSS 的 .panel-leave 动画时长一致
+    } else {
+      finish();
+    }
   }
 
   /* ================= 事件绑定 ================= */
@@ -648,7 +756,9 @@
     });
 
     $('#appMain').addEventListener('click', (e) => {
-      const el = e.target.closest('[data-open-day],[data-month-nav],[data-month-pick-open],[data-sal-nav],[data-go-today],[data-export-csv],[data-copy-summary],[data-export-all],[data-import-all],[data-clear-all],[data-ca-add],[data-ca-edit],[data-ca-del]');
+      // 日历左右滑动切月后短暂抑制本次滑动触发的 click，避免误点日历格
+      if (Date.now() < (window.__suppressClickUntil || 0)) return;
+      const el = e.target.closest('[data-open-day],[data-month-nav],[data-month-pick-open],[data-sal-nav],[data-go-today],[data-export-csv],[data-copy-summary],[data-export-all],[data-import-all],[data-clear-all],[data-ca-add],[data-ca-edit],[data-ca-del],[data-dc-add],[data-dc-edit],[data-dc-del]');
       if (!el) return;
       handleClick(el, e);
     });
@@ -713,16 +823,18 @@
       if (caSave) {
         const name = $('[data-field="caName"]', $('#modalBox')).value.trim();
         const amount = parseFloat($('[data-field="caAmount"]', $('#modalBox')).value);
-        const cas = (Store.getSettings().allowances || []).slice();
+        const isD = caEditingKind === 'deduction';
+        const list = (Store.getSettings()[isD ? 'deductions' : 'allowances'] || []).slice();
         const item = { name: name, amount: isNaN(amount) ? 0 : amount, unit: caEditingUnit || 'month' };
-        if (caEditingIndex >= 0 && caEditingIndex < cas.length) cas[caEditingIndex] = item;
-        else cas.push(item);
-        Store.setSettings({ allowances: cas });
+        if (caEditingIndex >= 0 && caEditingIndex < list.length) list[caEditingIndex] = item;
+        else list.push(item);
+        Store.setSettings(isD ? { deductions: list } : { allowances: list });
         caEditingIndex = -1;
         caEditingUnit = 'month';
+        caEditingKind = 'allowance';
         closeModal();
         renderSettings();
-        toast('补贴已保存');
+        toast(isD ? '扣款已保存' : '补贴已保存');
         return;
       }
       const el = e.target.closest('[data-shift],[data-daytype],[data-save],[data-del-day]');
@@ -840,11 +952,107 @@
       toast('补贴已删除');
       return;
     }
+    if (el.hasAttribute('data-dc-add')) { openCaModal(undefined, 'deduction'); return; }
+    if (el.dataset.dcEdit !== undefined) { openCaModal(Number(el.dataset.dcEdit), 'deduction'); return; }
+    if (el.dataset.dcDel !== undefined) {
+      const dcs = (Store.getSettings().deductions || []).slice();
+      dcs.splice(Number(el.dataset.dcDel), 1);
+      Store.setSettings({ deductions: dcs });
+      renderSettings();
+      toast('扣款已删除');
+      return;
+    }
+  }
+
+  /* ================= 记录页日历左右滑动切月 ================= */
+  // 用 Pointer Events 实现：触摸、鼠标拖拽均可触发；配合 CSS touch-action: pan-y 避免手势被 WebView 吞掉
+  const swipe = { x: 0, y: 0, t: 0, dx: 0, dy: 0, on: false };
+
+  function bindSwipe() {
+    const main = $('#appMain');
+    if (!main) return;
+
+    main.addEventListener('pointerdown', (e) => {
+      // 弹窗打开、非记录页、或翻页动画进行中时不响应
+      if ($('#modalMask') && !$('#modalMask').hidden) { swipe.on = false; return; }
+      const card = $('.cal-card');
+      if (!card || card._locked) { swipe.on = false; return; }
+      swipe.x = e.clientX; swipe.y = e.clientY; swipe.t = Date.now();
+      swipe.dx = 0; swipe.dy = 0; swipe.on = true;
+      swipe.w = card.offsetWidth || 320;   // 缓存卡片宽度，避免 move 中反复读 layout
+    }, { passive: true });
+
+    main.addEventListener('pointermove', (e) => {
+      if (!swipe.on) return;
+      swipe.dx = e.clientX - swipe.x;
+      swipe.dy = e.clientY - swipe.y;
+      // 水平位移占优时跟手拖动日历卡片
+      if (Math.abs(swipe.dx) > 8 && Math.abs(swipe.dx) > Math.abs(swipe.dy)) {
+        const card = $('.cal-card');
+        if (card && !card._locked) {
+          card.style.transition = 'none';
+          const w = swipe.w;
+          const off = Math.max(-w, Math.min(w, swipe.dx));
+          card.style.transform = 'translateX(' + off + 'px)';
+          card.style.opacity = String(1 - Math.min(1, Math.abs(off) / w * 0.4));
+        }
+      }
+    }, { passive: true });
+
+    const endSwipe = () => {
+      if (!swipe.on) return;
+      swipe.on = false;
+      const card = $('.cal-card');
+      if (!card || card._locked) return;
+      const dx = swipe.dx, dy = swipe.dy;
+      const dt = Date.now() - swipe.t;
+      const isSwipe = Math.abs(dx) > 50 || (Math.abs(dx) > 30 && Math.abs(dx) / Math.max(1, dt) > 0.4);
+      const horizontal = Math.abs(dx) >= Math.abs(dy) * 1.2;
+      if (!isSwipe || !horizontal) {
+        // 未达到翻页阈值：回弹复位
+        card.style.transition = 'transform .22s ease, opacity .22s ease';
+        card.style.transform = 'translateX(0)';
+        card.style.opacity = '1';
+        return;
+      }
+      // 左滑 → 下个月(+1)，右滑 → 上个月(-1)
+      window.__suppressClickUntil = Date.now() + 400;   // 抑制滑动结束触发的 click（鼠标拖拽尤其需要）
+      swipeFlip(card, dx < 0 ? 1 : -1, dx);
+    };
+    main.addEventListener('pointerup', endSwipe, { passive: true });
+    main.addEventListener('pointercancel', endSwipe, { passive: true });
+  }
+
+  /* 滑动翻月动画：旧日历卡片滑出 → 重渲染 → 新日历卡片滑入 */
+  function swipeFlip(card, dir, dx) {
+    const w = swipe.w;
+    const out = dx < 0 ? -w : w;      // 旧卡片滑出方向
+    const inFrom = dx < 0 ? w : -w;   // 新卡片进入起点
+    card._locked = true;
+    card.style.transition = 'transform .18s ease, opacity .18s ease';
+    card.style.transform = 'translateX(' + out + 'px)';
+    card.style.opacity = '0';
+    setTimeout(() => {
+      state.recMonth = shiftMonth(state.recMonth, dir);
+      state.selectedDay = '';         // 翻月后顶部卡片恢复显示今天
+      renderRecords();
+      const nc = $('.cal-card');
+      nc._locked = true;              // 滑入动画期间仍锁定，防止再次滑动打断
+      nc.style.transition = 'none';
+      nc.style.transform = 'translateX(' + inFrom + 'px)';
+      nc.style.opacity = '0';
+      void nc.offsetWidth;            // 强制回流，确保滑入动画生效
+      nc.style.transition = 'transform .2s ease, opacity .2s ease';
+      nc.style.transform = 'translateX(0)';
+      nc.style.opacity = '1';
+      setTimeout(() => { nc._locked = false; }, 200);
+    }, 180);
   }
 
   /* 滚动条自动隐藏：滚动/触摸/滚轮时显示，停止约 1.5 秒后隐藏 */
   function initScrollbarAutoHide() {
     const SB_DELAY = 1500;
+    const main = $('#appMain');
     function show(host) {
       host.classList.add('sb-active');
       clearTimeout(host._sbT);
@@ -853,8 +1061,8 @@
     // 捕获阶段监听所有元素的 scroll（scroll 不冒泡）
     document.addEventListener('scroll', (e) => {
       const t = e.target;
-      if (!t || t === document || t === document.documentElement || t === document.body) {
-        show(document.documentElement);
+      if (t === main || !t || t === document || t === document.documentElement || t === document.body) {
+        show(main);
       } else if (t.classList && t.classList.contains('modal')) {
         show(t);
       }
@@ -863,7 +1071,7 @@
     ['touchmove', 'wheel'].forEach((ev) => {
       document.addEventListener(ev, (e) => {
         const m = e.target && e.target.closest ? e.target.closest('.modal') : null;
-        show(m || document.documentElement);
+        show(m || main);
       }, { passive: true });
     });
   }
@@ -876,11 +1084,16 @@
 
     initScrollbarAutoHide();
     bindEvents();
+    bindSwipe();
     render();
 
-    // 保存状态（切走时）
+    // 保存状态（切走时）；仅月份变化时才写入，避免每 2 秒全量写 localStorage
+    let lastSavedMonth = '';
     setInterval(() => {
-      Store.setSettings({ lastSavedMonth: state.recMonth });
+      if (state.recMonth !== lastSavedMonth) {
+        lastSavedMonth = state.recMonth;
+        Store.setSettings({ lastSavedMonth: state.recMonth });
+      }
     }, 2000);
 
     // 注册 Service Worker

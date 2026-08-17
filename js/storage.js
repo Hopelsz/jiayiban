@@ -14,6 +14,15 @@
     ];
   }
 
+  /* 默认扣款项：社保、公积金、个人所得税（每月固定）；金额 0 表示未设置，不参与计算 */
+  function defaultDeductions() {
+    return [
+      { name: '社保', amount: 0, unit: 'month' },
+      { name: '公积金', amount: 0, unit: 'month' },
+      { name: '个人所得税', amount: 0, unit: 'month' }
+    ];
+  }
+
   const DEFAULT_SETTINGS = {
     baseSalary: 2280,          // 底薪（元）
     calcDays: 21.75,           // 月计薪天数
@@ -23,16 +32,10 @@
     otRateHoliday: 3.0,        // 节假日加班倍率
     allowances: defaultAllowances(),  // 补贴列表 [{ name, amount, unit }] unit: day|night|bonus|month
     allowancesDefaultsAdded: true,    // 默认补贴是否已就位；老数据首次迁移补默认后置 true，避免删除后又出现
-    roundMode: 'minute',       // minute | quarter | half
+    deductions: defaultDeductions(),  // 扣款项列表 [{ name, amount, unit }] unit: day|night|month
+    deductionsDefaultsAdded: true,    // 默认扣款项是否已就位；老数据首次迁移补默认后置 true，避免删除后又出现
     lastSavedMonth: '',        // 上次浏览的月份 YYYY-MM
-    lastSavedDate: ''          // 上次编辑的日期 YYYY-MM-DD
   };
-
-  const ROUND_MODES = [
-    { id: 'minute', name: '精确到分钟', label: '1分钟' },
-    { id: 'quarter', name: '每15分钟', label: '15分钟' },
-    { id: 'half', name: '每30分钟', label: '30分钟' }
-  ];
 
   let db = null;
 
@@ -92,6 +95,18 @@
 
   /* 迁移旧版补贴字段（餐补/夜班/全勤/自定义）为统一的 allowances 列表 */
   function migrateAllowances(settings) {
+    // 清理已移除的字段
+    delete settings.roundMode;
+    // 确保扣款项字段存在（老数据备份没有该字段时补空数组）
+    if (!Array.isArray(settings.deductions)) settings.deductions = [];
+    // 老数据首次加载时补默认扣款项（社保/公积金/个人所得税，按名称去重）
+    if (settings.deductionsDefaultsAdded !== true) {
+      const dNames = settings.deductions.map((d) => ((d && d.name) || '').trim());
+      defaultDeductions().forEach((d) => {
+        if (dNames.indexOf(d.name) === -1) settings.deductions.push(d);
+      });
+      settings.deductionsDefaultsAdded = true;
+    }
     if (Array.isArray(settings.allowances)) {
       // 已是新结构，仅清理可能残留的旧字段
       delete settings.mealAllowance;
@@ -146,9 +161,12 @@
           settings: Object.assign({}, DEFAULT_SETTINGS, parsed.settings || {}),
           records: parsed.records || {}
         };
-        // 老数据没有该标记时强制置 false，让迁移逻辑补默认补贴
+        // 老数据没有该标记时强制置 false，让迁移逻辑补默认补贴/扣款项
         if (parsed.settings && !('allowancesDefaultsAdded' in parsed.settings)) {
           db.settings.allowancesDefaultsAdded = false;
+        }
+        if (parsed.settings && !('deductionsDefaultsAdded' in parsed.settings)) {
+          db.settings.deductionsDefaultsAdded = false;
         }
         // 规范化所有记录
         const recs = {};
@@ -251,9 +269,12 @@
       settings: Object.assign({}, DEFAULT_SETTINGS, parsed.settings || {}),
       records: {}
     };
-    // 导入的备份若缺少该标记，同样强制置 false 以补默认补贴
+    // 导入的备份若缺少该标记，同样强制置 false 以补默认补贴/扣款项
     if (parsed.settings && !('allowancesDefaultsAdded' in parsed.settings)) {
       db.settings.allowancesDefaultsAdded = false;
+    }
+    if (parsed.settings && !('deductionsDefaultsAdded' in parsed.settings)) {
+      db.settings.deductionsDefaultsAdded = false;
     }
     migrateAllowances(db.settings);
     Object.keys(parsed.records || {}).forEach((k) => {
@@ -268,10 +289,6 @@
   }
 
   window.Store = {
-    DEFAULT_SETTINGS,
-    ROUND_MODES,
-    load,
-    save,
     getSettings,
     setSettings,
     getRecords,
@@ -279,7 +296,6 @@
     saveDay,
     removeDay,
     daysOfMonth,
-    toDateStr,
     toMonthStr,
     todayStr,
     exportAll,
