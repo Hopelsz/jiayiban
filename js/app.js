@@ -9,7 +9,8 @@
     tab: 'records',
     recMonth: Store.toMonthStr(new Date()),
     salMonth: Store.toMonthStr(new Date()),
-    selectedDay: ''   // 顶部卡片展示的日期，空 = 今天；点选日历某天后跟随该天
+    selectedDay: '',  // 顶部卡片展示的日期，空 = 今天；点选日历某天后跟随该天
+    statsRange: '6'   // 统计页范围：近 6 / 近 12 个月 / 全部
   };
 
   /* ================= 通用工具 ================= */
@@ -25,7 +26,9 @@
   }
 
   /* 日历格农历行：节日 > 节气 > 初一月份 > 日期（官方 lunar-javascript 库） */
-  const FEST_FIX = { '元旦节': '元旦', '国庆节': '国庆' };   // 公历节日去掉“节”字，与旧版一致
+  /* ponytail: 仅修正农历库返回的公历节日名（去掉“节”字保持与旧版一致），不是法定节假日表；
+     节假日判定本身来自 lunar-javascript 内置节日表 + 手动点选，无需逐年维护 */
+  const FEST_FIX = { '元旦节': '元旦', '国庆节': '国庆' };
   function lunarText(ds) {
     const p = ds.split('-').map(Number);
     const solar = Solar.fromYmd(p[0], p[1], p[2]);
@@ -378,10 +381,10 @@
     render();
   }
 
-  /* 悬浮"今天"按钮：记录 / 工资页显示，设置页隐藏 */
+  /* 悬浮"今天"按钮：记录 / 工资页显示，统计 / 设置页隐藏 */
   function updateFab() {
     const fab = $('#fabToday');
-    if (fab) fab.hidden = state.tab === 'settings';
+    if (fab) fab.hidden = state.tab === 'settings' || state.tab === 'stats';
   }
 
   function renderMonthPicker() {
@@ -521,6 +524,96 @@
             ((settings.allowances || []).some((a) => a && a.unit === 'bonus' && (Number(a.amount) || 0) > 0) && sum.fullAttendance ? '<br/>本月已达全勤，全勤奖已计入。' : '') +
             '<br/>工时为估算，实际以工厂结算为准。' +
           '</div>' +
+        '</div>' +
+      '</div>';
+  }
+
+  /* ================= 统计页 ================= */
+  function renderStats() {
+    const settings = Store.getSettings();
+    const recs = Store.getRecords();
+    $('#headerTitle').textContent = '统计';
+    $('#headerSub').textContent = '工时与工资概览';
+
+    // 按月聚合有记录的日期
+    const byMonth = {};
+    Object.keys(recs).forEach((ds) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(ds)) return;
+      const m = ds.slice(0, 7);
+      if (!byMonth[m]) byMonth[m] = [];
+      byMonth[m].push(ds);
+    });
+    const months = Object.keys(byMonth).sort();
+    const range = state.statsRange;
+    const shown = range === 'all' ? months : months.slice(-parseInt(range, 10));
+
+    // 逐月计算工资
+    const rows = shown.map((m) => {
+      const p = m.split('-');
+      const y = parseInt(p[0], 10), mo = parseInt(p[1], 10) - 1;
+      return { m, sal: Calc.monthSalary(y, mo, recs, settings) };
+    });
+
+    if (!rows.length) {
+      $('#appMain').innerHTML =
+        '<div class="tab-panel">' +
+          '<div class="empty-tip">暂无记录，去「记录」页添加工时后即可查看统计。</div>' +
+        '</div>';
+      return;
+    }
+
+    const totalMoney = rows.reduce((a, r) => a + r.sal.total, 0);
+    const totalHours = rows.reduce((a, r) => a + (r.sal.sum.normalHours + r.sal.sum.weekdayOtHours + r.sal.sum.weekendHours + r.sal.sum.holidayHours), 0);
+    const totalDays = rows.reduce((a, r) => a + r.sal.sum.workDays, 0);
+    const maxMoney = Math.max(1, ...rows.map((r) => r.sal.total));
+
+    const rangeLabel = range === 'all' ? '全部记录' : '近 ' + range + ' 个月';
+    const caps = [
+      { id: '6', n: '近 6 个月' },
+      { id: '12', n: '近 12 个月' },
+      { id: 'all', n: '全部' }
+    ];
+    const chips = caps.map((c) =>
+      '<button type="button" class="chip chip-sm' + (state.statsRange === c.id ? ' active' : '') + '" data-stats-range="' + c.id + '">' + c.n + '</button>'
+    ).join('');
+
+    const bars = rows.map((r) => {
+      const h = Math.max(3, Math.round((r.sal.total / maxMoney) * 100));
+      return '<div class="st-bar" title="' + r.m + ' ¥' + Calc.fmtMoney(r.sal.total) + '">' +
+        '<div class="st-fill" style="height:' + h + '%"></div>' +
+        '<span class="st-lb">' + parseInt(r.m.slice(5), 10) + '月</span>' +
+      '</div>';
+    }).join('');
+
+    const list = rows.slice().reverse().map((r) => {
+      const hours = r.sal.sum.normalHours + r.sal.sum.weekdayOtHours + r.sal.sum.weekendHours + r.sal.sum.holidayHours;
+      return '<div class="fee-row">' +
+        '<div class="name">' + r.m + '<span class="d">出勤 ' + r.sal.sum.workDays + ' 天 · 工时 ' + fmtHour(hours) + ' · 底薪 ¥' + Calc.fmtMoney(r.sal.baseSalary) + '</span></div>' +
+        '<div class="val">¥' + Calc.fmtMoney(r.sal.total) + '</div>' +
+      '</div>';
+    }).join('');
+
+    $('#appMain').innerHTML =
+      '<div class="tab-panel">' +
+        '<div class="salary-hero">' +
+          '<div class="cap">累计工资估算（' + rangeLabel + '）</div>' +
+          '<div class="amount">¥' + Calc.fmtMoney(totalMoney) + '</div>' +
+          '<div class="breakdown"><span>累计工时 ' + fmtHour(totalHours) + '</span><span>出勤 ' + totalDays + ' 天</span><span>' + rows.length + ' 个月</span></div>' +
+        '</div>' +
+
+        '<div class="card">' +
+          '<div class="card-title">统计范围</div>' +
+          '<div class="day-type-bar">' + chips + '</div>' +
+        '</div>' +
+
+        '<div class="card">' +
+          '<div class="card-title">每月工资</div>' +
+          '<div class="st-bars">' + bars + '</div>' +
+        '</div>' +
+
+        '<div class="card">' +
+          '<div class="card-title">月度明细</div>' +
+          list +
         '</div>' +
       '</div>';
   }
@@ -894,11 +987,12 @@
   function render() {
     if (state.tab === 'records') renderRecords();
     else if (state.tab === 'salary') renderSalary();
+    else if (state.tab === 'stats') renderStats();
     else renderSettings();
     updateFab();
   }
 
-  const TAB_ORDER = ['records', 'salary', 'settings'];
+  const TAB_ORDER = ['records', 'salary', 'stats', 'settings'];
 
   /* 切页动画：旧面板按方向滑出 → 渲染新面板 → 新面板从反方向滑入 */
   function switchTab(tab) {
@@ -947,7 +1041,7 @@
     $('#appMain').addEventListener('click', (e) => {
       // 日历左右滑动切月后短暂抑制本次滑动触发的 click，避免误点日历格
       if (Date.now() < (window.__suppressClickUntil || 0)) return;
-      const el = e.target.closest('[data-open-day],[data-month-nav],[data-month-pick-open],[data-sal-nav],[data-go-today],[data-export-csv],[data-copy-summary],[data-export-all],[data-import-all],[data-clear-all],[data-ca-add],[data-ca-edit],[data-ca-del],[data-dc-add],[data-dc-edit],[data-dc-del],[data-save-settings],[data-bs-del],[data-bs-edit],[data-effect-date]');
+      const el = e.target.closest('[data-open-day],[data-month-nav],[data-month-pick-open],[data-sal-nav],[data-go-today],[data-export-csv],[data-copy-summary],[data-export-all],[data-import-all],[data-clear-all],[data-ca-add],[data-ca-edit],[data-ca-del],[data-dc-add],[data-dc-edit],[data-dc-del],[data-save-settings],[data-bs-del],[data-bs-edit],[data-effect-date],[data-stats-range]');
       if (!el) return;
       handleClick(el, e);
     });
@@ -1172,6 +1266,13 @@
   function handleClick(el, e) {
     e.stopPropagation();
     const root = el.closest('.tab-panel') || el.closest('.modal') || document;
+
+    /* 统计页范围切换 */
+    if (el.hasAttribute('data-stats-range')) {
+      state.statsRange = el.dataset.statsRange;
+      renderStats();
+      return;
+    }
 
     if (el.dataset.shift) {
       $$('[data-shift]', root).forEach((b) => b.classList.remove('active'));

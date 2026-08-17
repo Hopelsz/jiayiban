@@ -4,7 +4,7 @@
   "description": "专为工厂上班族打造的加班工时记录与月薪计算工具。记录每天的正常班与加班小时数，自动按平时（1.5 倍）/ 周末（2 倍）/ 节假日（3 倍）计算加班费并汇总月薪。",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node tests/check-css.js && node tests/calc-selfcheck.js && node tests/storage-selfcheck.js",
     "start": "node server.js"
   },
   "keywords": [],

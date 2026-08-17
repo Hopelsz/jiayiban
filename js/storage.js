@@ -189,6 +189,11 @@
         if (parsed.settings && !('deductionsDefaultsAdded' in parsed.settings)) {
           db.settings.deductionsDefaultsAdded = false;
         }
+        // 老数据没有 allowances 列表字段时，移除 Object.assign 带入的默认列表，
+        // 让 migrateAllowances 走旧字段（餐补/夜班/全勤/自定义）重建分支，避免金额丢失
+        if (parsed.settings && !('allowances' in parsed.settings)) {
+          delete db.settings.allowances;
+        }
         // 旧版底薪快照迁移为调整记录
         if (parsed.settings && !('baseSalaryLog' in parsed.settings)) {
           db.settings.baseSalaryLog = migrateBaseSalaryLog(db.settings);
@@ -301,6 +306,11 @@
     }
     if (parsed.settings && !('deductionsDefaultsAdded' in parsed.settings)) {
       db.settings.deductionsDefaultsAdded = false;
+    }
+    // 老数据没有 allowances 列表字段时，移除 Object.assign 带入的默认列表，
+    // 让 migrateAllowances 走旧字段（餐补/夜班/全勤/自定义）重建分支，避免金额丢失
+    if (parsed.settings && !('allowances' in parsed.settings)) {
+      delete db.settings.allowances;
     }
     if (parsed.settings && !('baseSalaryLog' in parsed.settings)) {
       db.settings.baseSalaryLog = migrateBaseSalaryLog(db.settings);
