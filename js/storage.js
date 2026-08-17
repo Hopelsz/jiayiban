@@ -24,7 +24,10 @@
   }
 
   const DEFAULT_SETTINGS = {
-    baseSalary: 2280,          // 底薪（元）
+    baseSalary: 2000,          // 默认底薪（元），所有未调整月份的基础
+    baseSalaryByMonth: {},     // 旧版按月指定底薪（已弃用，仅数据迁移用）
+    baseSalaryLog: [],         // 底薪调整记录 [{ m:'YYYY-MM', v:金额 }] 升序；某月底薪 = 生效月份 ≤ 该月的最新一条，否则用 baseSalary
+    baseSalaryEffectDate: '',  // 最近一次底薪调整的生效月份 YYYY-MM（仅用于设置页回显）
     calcDays: 21.75,           // 月计薪天数
     workHoursPerDay: 8,        // 每日标准工时
     otRateWeekday: 1.5,        // 平时加班倍率
@@ -151,6 +154,24 @@
     delete settings.customAllowance;
   }
 
+  /* 旧版 baseSalaryByMonth + baseSalary（全局=最新值）迁移为 baseSalaryLog（生效点列表） */
+  function migrateBaseSalaryLog(settings) {
+    const byMonth = settings.baseSalaryByMonth || {};
+    const log = [];
+    Object.keys(byMonth).filter((m) => /^\d{4}-\d{2}$/.test(m)).sort().forEach((m) => {
+      log.push({ m: m, v: Number(byMonth[m]) });
+    });
+    if (log.length) {
+      // 旧模型下 byMonth 之外的月份回退全局 baseSalary（当时的最新值），补一条"下月起"记录保持一致
+      const last = log[log.length - 1].m;
+      const y = parseInt(last.slice(0, 4), 10);
+      const mo = parseInt(last.slice(5, 7), 10);
+      const nm = mo === 12 ? (y + 1) + '-01' : y + '-' + String(mo + 1).padStart(2, '0');
+      log.push({ m: nm, v: Number(settings.baseSalary) });
+    }
+    return log;
+  }
+
   function load() {
     if (db) return db;
     try {
@@ -167,6 +188,10 @@
         }
         if (parsed.settings && !('deductionsDefaultsAdded' in parsed.settings)) {
           db.settings.deductionsDefaultsAdded = false;
+        }
+        // 旧版底薪快照迁移为调整记录
+        if (parsed.settings && !('baseSalaryLog' in parsed.settings)) {
+          db.settings.baseSalaryLog = migrateBaseSalaryLog(db.settings);
         }
         // 规范化所有记录
         const recs = {};
@@ -276,6 +301,9 @@
     }
     if (parsed.settings && !('deductionsDefaultsAdded' in parsed.settings)) {
       db.settings.deductionsDefaultsAdded = false;
+    }
+    if (parsed.settings && !('baseSalaryLog' in parsed.settings)) {
+      db.settings.baseSalaryLog = migrateBaseSalaryLog(db.settings);
     }
     migrateAllowances(db.settings);
     migrateFinesToDeductions(db.settings, parsed.fines);   // 旧版"当月罚款"迁移为"仅当月"扣款

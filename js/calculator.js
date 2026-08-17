@@ -90,7 +90,7 @@
         s.weekendHours += roundHours(split.weekend);
         s.holidayHours += roundHours(split.holiday);
       }
-      if (rec && rec.shift === 'leave') {
+      if (rec && (Number(rec.leaveHours) || 0) > 0) {
         s.leaveHoursSum += Math.max(0, Number(rec.leaveHours) || 0);
       }
       if (!isWeekend(ds)) s.weekdaysInMonth += 1;
@@ -99,16 +99,27 @@
     return s;
   }
 
+  /* 某月使用的底薪：取生效月份 ≤ 该月的最新一条调整记录，否则用默认底薪 */
+  function baseSalaryFor(monthStr, settings) {
+    let v = Number(settings.baseSalary) || 0;
+    (settings.baseSalaryLog || []).forEach((h) => {
+      if (h && h.m && h.m <= monthStr) v = Number(h.v) || v;
+    });
+    return v;
+  }
+
   /* 月度薪资明细 */
   function monthSalary(year, month, recs, settings) {
     const sum = monthSummary(year, month, recs, settings);
+    const monthStr = year + '-' + String(month + 1).padStart(2, '0');
+    const base = baseSalaryFor(monthStr, settings);
     const hourlyRate = settings.calcDays > 0 && settings.workHoursPerDay > 0
-      ? settings.baseSalary / settings.calcDays / settings.workHoursPerDay
+      ? base / settings.calcDays / settings.workHoursPerDay
       : 0;
 
     const items = [
       { key: 'base', name: '底薪（正常班）', detail: '按 ' + settings.calcDays + ' 天计薪，时薪 ' + fmtMoney(hourlyRate) + ' 元',
-        value: settings.baseSalary },
+        value: base },
       { key: 'weekdayOt', name: '平时加班费', detail: fmtMoney(settings.otRateWeekday) + ' 倍 × ' + sum.weekdayOtHours + ' 小时',
         value: hourlyRate * settings.otRateWeekday * sum.weekdayOtHours },
       { key: 'weekendOt', name: '周末加班费', detail: fmtMoney(settings.otRateWeekend) + ' 倍 × ' + sum.weekendHours + ' 小时',
@@ -143,16 +154,36 @@
       items.push({ key: 'allowance:' + i, name: name, detail: detail, value: value });
     });
 
-    // 扣款：month 每月固定（如社保/公积金/个税）；once 仅当月（如迟到罚款，只在所选月份扣一次）
-    const monthStr = year + '-' + String(month + 1).padStart(2, '0');
+    // 扣款：month 每月固定（如社保/公积金/个税）；once 仅当月（如迟到罚款）；percent 按底薪比例（改底薪自动变化）
+    // 生效的底薪调整记录可覆盖社保/公积金/个税金额（h.s/h.g/h.t），未覆盖时继承最近一条带值的
+    const effOv = { s: 0, g: 0, t: 0 };
+    (settings.baseSalaryLog || []).forEach((h) => {
+      if (!h || !h.m || h.m > monthStr) return;
+      ['s', 'g', 't'].forEach((k) => { const x = Number(h[k]) || 0; if (x > 0) effOv[k] = x; });
+    });
+    const OV_KEYS = { '社保': 's', '公积金': 'g', '个人所得税': 't' };
     (settings.deductions || []).forEach((dl, i) => {
-      const amount = Number(dl && dl.amount) || 0;
-      if (amount <= 0) return;
+      const amount0 = Number(dl && dl.amount) || 0;
+      if (amount0 <= 0) return;
       const unit = (dl && dl.unit) || 'month';
       const appliedMonth = (dl && dl.appliedMonth) || '';
       if (unit === 'once' && appliedMonth !== monthStr) return;
       const name = ((dl && dl.name) || '').trim() || '扣款';
-      const detail = unit === 'once' ? '仅当月扣款（' + appliedMonth + '）' : '每月固定扣款';
+      let amount = amount0;
+      let detail;
+      if (unit === 'percent') {
+        amount = base * amount0 / 100;
+        detail = '底薪 ¥' + fmtMoney(base) + ' × ' + amount0 + '%';
+      } else if (unit === 'once') {
+        detail = '仅当月扣款（' + appliedMonth + '）';
+      } else {
+        detail = '每月固定扣款';
+      }
+      const ov = OV_KEYS[name] ? effOv[OV_KEYS[name]] : 0;
+      if (ov > 0) {
+        amount = ov;
+        detail = '底薪调整记录指定 ' + name + ' ¥' + fmtMoney(ov);
+      }
       items.push({ key: 'deduct:' + i, name: name, detail: detail, value: -amount });
     });
 
@@ -175,6 +206,7 @@
 
     return {
       sum,
+      baseSalary: base,
       hourlyRate,
       items,
       total: roundMoney(subTotal)
@@ -191,6 +223,7 @@
     daySplit,
     hasAnyTime,
     monthSummary,
-    monthSalary
+    monthSalary,
+    baseSalaryFor
   };
 })();

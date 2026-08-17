@@ -99,6 +99,13 @@
       '<button class="chip chip-sm' + (active ? ' active' : '') + '" data-shift="' + id + '">' + label +
       (sub ? '<span class="sub">' + sub + '</span>' : '') + '</button>';
     const isNoWork = shift === 'rest' || shift === 'leave';
+    const otV = Number(rec.otHours) || 0;
+    const lv = Number(rec.leaveHours) || 0;
+    const w = Math.max(0, st.workHoursPerDay);
+    // 请假满每日标准工时 = 全天请假，不再计算工时与加班
+    const fullLeave = w > 0 && lv >= w;
+    // 初始 Tab：全天请假或「只填了请假」落在请假；否则（含加班+请假并存）默认加班
+    const initTab = (fullLeave || shift === 'leave' || (lv > 0 && otV <= 0)) ? 'leave' : 'ot';
     const fmtRate = (v) => {
       const n = Math.round(Number(v) * 100) / 100;
       return (Number.isInteger(n) ? String(n) : n.toFixed(2)) + '倍';
@@ -121,19 +128,29 @@
       '</div>' +
 
       '<div style="margin-top:14px;">' +
-        '<div class="grp-label">请假</div>' +
-        '<div>' + hourField('leaveHours', '请假小时', rec.leaveHours) + '</div>' +
-      '</div>' +
+        '<div class="grp-label">工时记录</div>' +
+        '<div id="workTabs" class="work-tabs' + (isNoWork || fullLeave ? ' hidden' : '') + '">' +
+          '<button type="button" class="wt-btn' + (initTab === 'ot' ? ' active' : '') + '" data-work-tab="ot">加班' + (otV > 0 ? '<i class="wt-v">' + otV + 'h</i>' : '') + '</button>' +
+          '<button type="button" class="wt-btn' + (initTab === 'leave' ? ' active' : '') + '" data-work-tab="leave">请假' + (lv > 0 ? '<i class="wt-v">' + lv + 'h</i>' : '') + '</button>' +
+        '</div>' +
 
-      '<div id="hourGrid"' + (isNoWork ? ' class="hidden"' : '') + ' style="margin-top:14px;">' +
-        '<div>' + hourField('otHours', '加班（小时）', rec.otHours) + '</div>' +
-        '<div class="form-tip">' + (type === 'weekday'
-          ? '未填加班 = 正常出勤 ' + Math.max(0, st.workHoursPerDay) + ' 小时'
-          : '上班即全天加班，请填加班小时；不填 = 当天未加班') + '</div>' +
-      '</div>' +
+        '<div id="otArea" class="ot-area' + (isNoWork || fullLeave || shift === 'leave' || initTab === 'leave' ? ' hidden' : '') + '">' +
+          '<div>' + hourField('otHours', '加班（小时）', rec.otHours) + '</div>' +
+          '<div class="form-tip">' + (type === 'weekday'
+            ? '未填加班 = 正常出勤 ' + Math.max(0, st.workHoursPerDay) + ' 小时'
+            : '上班即全天加班，请填加班小时；不填 = 当天未加班') + '</div>' +
+        '</div>' +
 
-      '<div id="restTip" class="rest-tip' + (isNoWork ? '' : ' hidden') + '">' +
-        (shift === 'leave' ? '今日请假，不计算工时与出勤；请假按小时扣款，满 ' + Math.max(0, st.workHoursPerDay) + ' 小时算一天，零头按小时扣' : '今日休息，不计算工时与出勤') +
+        '<div id="leaveArea" class="ot-area' + (shift === 'rest' || initTab === 'ot' ? ' hidden' : '') + '">' +
+          '<div>' + hourField('leaveHours', '请假（小时）', rec.leaveHours) + '</div>' +
+          '<div class="form-tip">请假按小时扣减当日出勤：正常出勤 = ' + w + ' − 请假小时（最小 0）；加班只算超出 ' + w + ' 小时的部分</div>' +
+        '</div>' +
+
+        '<div id="restTip" class="rest-tip' + (isNoWork || fullLeave ? '' : ' hidden') + '">' +
+          (shift === 'leave' || fullLeave
+            ? '已请假满 ' + w + ' 小时（全天请假），不计算工时与加班；请假扣款满 ' + w + ' 小时按一天计'
+            : '今日休息，不计算工时与出勤') +
+        '</div>' +
       '</div>' +
 
       '<div class="field-row" style="margin-top:12px;">' +
@@ -143,15 +160,40 @@
     );
   }
 
-  /* 半小时步进器：- / + 每点一次增减 0.5 小时，中间可手动输入 */
+  /* 小时选择器：0~12 半小时步进，整点/半点分行错位排列，纯点选无键盘 */
+  const HOUR_ROWS = (function () {
+    const ints = [], halves = [];
+    for (let h = 0; h <= 12; h += 0.5) {
+      (Number.isInteger(h) ? ints : halves).push(h);
+    }
+    const chunk = (arr) => {
+      const out = [];
+      for (let i = 0; i < arr.length; i += 6) out.push(arr.slice(i, i + 6));
+      return out;
+    };
+    const ic = chunk(ints), hc = chunk(halves);
+    const rows = [];
+    for (let i = 0; i < Math.max(ic.length, hc.length); i++) {
+      if (ic[i]) rows.push({ half: false, vals: ic[i] });
+      if (hc[i]) rows.push({ half: true, vals: hc[i] });
+    }
+    return rows; // 行序：0~5 / 0.5~5.5 / 6~11 / 6.5~11.5 / 12
+  })();
   function hourField(key, label, val) {
-    return '<div class="field-row" style="margin-bottom:0;">' +
+    const v = Number(val) || 0;
+    return '<div class="field-row hsel" style="margin-bottom:0;">' +
       '<label>' + label + '</label>' +
-      '<div class="stepper">' +
-        '<button type="button" class="step-btn" data-step="' + key + '" data-delta="-0.5" aria-label="减少半小时">−</button>' +
-        '<input class="field-input step-input" type="number" inputmode="decimal" step="0.5" min="0" data-field="' + key + '" placeholder="0" value="' + esc(val || '') + '" />' +
-        '<button type="button" class="step-btn" data-step="' + key + '" data-delta="0.5" aria-label="增加半小时">+</button>' +
+      '<div class="hsel-val"><b data-hsel-val="' + key + '">' + (v > 0 ? v : '0') + '</b><span>小时</span></div>' +
+      '<div class="hsel-grid">' +
+        HOUR_ROWS.map(function (row) {
+          return '<div class="hsel-row">' +
+            row.vals.map(function (h) {
+              return '<button type="button" class="hchip' + (Math.abs(h - v) < 0.001 ? ' active' : '') + '" data-set-hour="' + key + '" data-h="' + h + '">' + h + '</button>';
+            }).join('') +
+          '</div>';
+        }).join('') +
       '</div>' +
+      '<input type="hidden" data-field="' + key + '" value="' + (v > 0 ? v : '') + '" />' +
     '</div>';
   }
 
@@ -166,8 +208,9 @@
     $$('[data-daytype]', elRoot).forEach((b) => { if (b.classList.contains('active')) rec.dayType = b.dataset.daytype; });
     const shiftBtn = $('[data-shift].active', elRoot);
     rec.shift = shiftBtn ? shiftBtn.dataset.shift : 'day';
-    // 填了请假小时即视为请假（无需点击请假按钮）
-    if ((Number(rec.leaveHours) || 0) > 0) rec.shift = 'leave';
+    // 加班与请假可同时存在：
+    // - 选「请假」班次 = 全天请假（不计算出勤）
+    // - 白班/夜班 + 请假小时 = 当日部分请假（正常出勤，加班照算，请假按小时扣款）
     const note = $('#dayNote', elRoot);
     rec.note = note ? note.value.trim() : '';
     return rec;
@@ -176,17 +219,23 @@
   function saveDay(dateStr, elRoot, silent) {
     const fromModal = elRoot.classList.contains('modal');
     const rec = readForm(elRoot, Store.getDay(dateStr));
+    // 请假满每日标准工时 = 全天请假：清空加班与正常工时，不计算出勤（防旧数据/绕过 UI）
+    const w = Math.max(0, Store.getSettings().workHoursPerDay);
+    if (rec.shift !== 'rest' && w > 0 && (Number(rec.leaveHours) || 0) >= w) {
+      rec.otHours = '';
+      rec.workHours = '';
+      rec.shift = 'leave';
+    }
     const isNoWork = rec.shift === 'rest' || rec.shift === 'leave';
     if (!isNoWork) {
       const type = Calc.resolveDayType(Object.assign({ date: dateStr }, rec));
       if (type === 'weekday') {
-        // 工作日：未填正常班工时 → 默认按每日标准工时出勤
-        if ((Number(rec.workHours) || 0) <= 0) {
-          const def = Store.getSettings().workHoursPerDay;
-          rec.workHours = String((def > 0) ? def : 8);
-        }
-      } else if (!Calc.hasAnyTime(rec)) {
-        // 周末/节假日：上班即全天加班，未填任何工时 = 当天未加班
+        // 工作日：正常出勤 = 每日标准工时 − 请假小时（请假扣减当日出勤），最少 0
+        const def = Store.getSettings().workHoursPerDay;
+        const std = (def > 0) ? def : 8;
+        rec.workHours = String(Math.max(0, std - (Number(rec.leaveHours) || 0)));
+      } else if (!Calc.hasAnyTime(rec) && (Number(rec.leaveHours) || 0) <= 0) {
+        // 周末/节假日：上班即全天加班，未填任何工时且未请假 = 当天未加班
         Store.removeDay(dateStr);
         if (!silent) toast('当天无加班，未保存');
         if (fromModal) closeModal();
@@ -253,7 +302,8 @@
     days.forEach((ds) => {
       const rec = recs[ds];
       const isNoWork = rec && (rec.shift === 'rest' || rec.shift === 'leave');
-      const has = !!(rec && (Calc.hasAnyTime(rec) || isNoWork));
+      const lh = rec ? (Number(rec.leaveHours) || 0) : 0;
+      const has = !!(rec && (Calc.hasAnyTime(rec) || isNoWork || lh > 0));
       let info = '';
       if (has) {
         if (isNoWork && Calc.dayMinutes(rec).total === 0) {
@@ -266,10 +316,15 @@
         } else {
           const mins = Calc.dayMinutes(rec);
           const otH = Calc.roundHours(mins.ot);
+          const workH = Calc.roundHours(mins.work);
           const type = Calc.resolveDayType(Object.assign({ date: ds }, rec));
+          // 加班与请假分两行显示，不再挤在同一行
           info =
-            (rec.shift === 'night' ? '<span class="ot-night">夜</span>' : '') +
-            '<span class="ot-' + type + '">' + (otH > 0 ? '+' + otH : '0') + 'h</span>';
+            '<span class="ot-line">' +
+              (rec.shift === 'night' ? '<span class="ot-night">夜</span>' : '') +
+              '<span class="ot-' + type + '">' + (otH > 0 ? '+' + otH : (workH > 0 ? '班' + workH : '0')) + 'h</span>' +
+            '</span>' +
+            (lh > 0 ? '<span class="ot-line">假' + lh + '</span>' : '');
         }
       }
       cells +=
@@ -288,7 +343,6 @@
           '<button class="nav" data-month-nav="-1">‹</button>' +
           '<button type="button" class="mt" data-month-pick-open>' + year + '年' + (mon + 1) + '月</button>' +
           '<button class="nav" data-month-nav="1">›</button>' +
-          '<button type="button" class="btn-today" data-go-today>今天</button>' +
         '</div>' +
 
         '<div class="card cal-card">' +
@@ -301,9 +355,13 @@
   /* ================= 年月选择器 ================= */
   let pickerYear = null;     // 选择器中当前浏览的年份
   let pickerMode = 'month';  // 'month' 选月份；'year' 选年份
+  let pickerBase = null;     // 选择器高亮月份 YYYY-MM（设置页传入），null 时按当前页推断
+  let pickerOnPick = null;   // 选中月份回调（设置页用），null 时按当前页跳转
 
-  function openMonthPicker() {
-    pickerYear = parseInt(currentMonthStr().split('-')[0], 10);
+  function openMonthPicker(initMonth, onPick) {
+    pickerBase = initMonth || null;
+    pickerOnPick = onPick || null;
+    pickerYear = parseInt((initMonth || currentMonthStr()).split('-')[0], 10);
     pickerMode = 'month';
     renderMonthPicker();
   }
@@ -320,9 +378,16 @@
     render();
   }
 
+  /* 悬浮"今天"按钮：记录 / 工资页显示，设置页隐藏 */
+  function updateFab() {
+    const fab = $('#fabToday');
+    if (fab) fab.hidden = state.tab === 'settings';
+  }
+
   function renderMonthPicker() {
-    const curYear = parseInt(currentMonthStr().split('-')[0], 10);
-    const curMon = parseInt(currentMonthStr().split('-')[1], 10);
+    const base = pickerBase || currentMonthStr();
+    const curYear = parseInt(base.split('-')[0], 10);
+    const curMon = parseInt(base.split('-')[1], 10);
     let body;
     if (pickerMode === 'year') {
       // 年份模式：以 12 年为一页的网格，点击年份选中后回到月份模式
@@ -355,7 +420,7 @@
           '<button type="button" class="nav" data-year-nav="1"' + (pickerYear >= 2100 ? ' disabled' : '') + '>›</button>' +
         '</div>' +
         '<div class="mp-grid">' + months + '</div>' +
-        '<button type="button" class="mp-back" data-month-today>回到今天</button>';
+        (pickerOnPick ? '' : '<button type="button" class="mp-back" data-month-today>回到今天</button>');
     }
     openModal(
       '<div class="m-title">' + (pickerMode === 'year' ? '选择年份' : '选择年月') + '<button class="m-close" data-close>✕</button></div>' +
@@ -383,6 +448,7 @@
     );
     // 打开时同步一次状态，保证加班/请假区域的显示与记录一致
     syncLeaveState($('#modalBox'));
+    updateHsel($('#modalBox'));
   }
 
   /* ================= 工资页 ================= */
@@ -401,8 +467,9 @@
     $('#headerTitle').textContent = '工资计算';
     $('#headerSub').textContent = year + '年' + (mon + 1) + '月';
 
-    const extra = total - settings.baseSalary;
-    let breakdown = '<span>底薪 ¥' + Calc.fmtMoney(settings.baseSalary) + '</span>';
+    const extra = total - sal.baseSalary;
+    const customBase = sal.baseSalary !== settings.baseSalary;
+    let breakdown = '<span>底薪 ¥' + Calc.fmtMoney(sal.baseSalary) + (customBase ? '<i class="c-tag">该月指定</i>' : '') + '</span>';
     if (extra >= 0) breakdown += '<span>含加班补贴 ¥' + Calc.fmtMoney(extra) + '</span>';
 
     const feeRows = sal.items.map((it) =>
@@ -418,11 +485,10 @@
           '<button class="nav" data-sal-nav="-1">‹</button>' +
           '<button type="button" class="mt" data-month-pick-open>' + year + '年' + (mon + 1) + '月</button>' +
           '<button class="nav" data-sal-nav="1">›</button>' +
-          '<button type="button" class="btn-today" data-go-today>今天</button>' +
         '</div>' +
 
         '<div class="salary-hero">' +
-          '<div class="cap">本月预估工资（税前）</div>' +
+          '<div class="cap">本月预估工资（税后）</div>' +
           '<div class="amount">¥' + Calc.fmtMoney(total) + '</div>' +
           '<div class="breakdown">' + breakdown + '</div>' +
         '</div>' +
@@ -445,7 +511,7 @@
         '<div class="card">' +
           '<div class="card-title">计算规则</div>' +
           '<div class="rule-box">' +
-            '<b>时薪</b> = 底薪 ÷ ' + settings.calcDays + ' 天 ÷ ' + settings.workHoursPerDay + ' 小时 = <b>¥' + Calc.fmtMoney(sal.hourlyRate) + '</b>/时<br/>' +
+            '<b>时薪</b> = 底薪 ¥' + Calc.fmtMoney(sal.baseSalary) + (customBase ? '（该月指定）' : '') + ' ÷ ' + settings.calcDays + ' 天 ÷ ' + settings.workHoursPerDay + ' 小时 = <b>¥' + Calc.fmtMoney(sal.hourlyRate) + '</b>/时<br/>' +
             '<b>平时加班</b>（工作日）按 ' + Calc.fmtMoney(settings.otRateWeekday) + ' 倍计，<br/>' +
             '<b>周末加班</b>按 ' + Calc.fmtMoney(settings.otRateWeekend) + ' 倍计，<br/>' +
             '<b>节假日加班</b>按 ' + Calc.fmtMoney(settings.otRateHoliday) + ' 倍计。<br/>' +
@@ -456,11 +522,6 @@
             '<br/>工时为估算，实际以工厂结算为准。' +
           '</div>' +
         '</div>' +
-
-        '<div class="btn-row" style="margin-bottom:6px;">' +
-          '<button class="btn btn-ghost" data-export-csv>导出明细</button>' +
-          '<button class="btn btn-ghost-2" data-copy-summary>复制工资单</button>' +
-        '</div>' +
       '</div>';
   }
 
@@ -469,17 +530,24 @@
     const s = Store.getSettings();
     $('#headerTitle').textContent = '设置';
     $('#headerSub').textContent = '工资参数与数据管理';
+    /* 回显：生效月份与底薪输入框默认取当前月份，底薪显示当前月份实际生效的值；
+       若未改底薪直接保存，因新值与当前月底薪相同不会误建调整记录 */
+    const effMonth = Store.toMonthStr(new Date());
+    const effBase = Calc.baseSalaryFor(effMonth, s);
 
-    const num = (key, label, hint, step) =>
-      '<div class="field-row"><label>' + label + '</label>' +
-      '<input class="field-input set-input" type="number" inputmode="decimal" step="' + (step || '0.01') + '" data-set="' + key + '" value="' + s[key] + '" placeholder="' + (hint || '') + '" /></div>';
+    const num = (key, label, hint, step) => {
+      const val = key === 'baseSalary' ? effBase : s[key];
+      return '<div class="field-row"><label>' + label + '</label>' +
+        '<input class="field-input set-input" type="number" inputmode="decimal" step="' + (step || '0.01') + '" data-set="' + key + '" value="' + val + '" placeholder="' + (hint || '') + '" /></div>';
+    };
 
     const UNIT_LABEL = {
       day: '按出勤天数',
       night: '按夜班天数',
       bonus: '全勤达标发放',
       month: '每月固定',
-      once: '仅当月'
+      once: '仅当月',
+      percent: '按底薪比例'
     };
     /* 补贴 / 扣款列表渲染（kind: allowance | deduction） */
     const renderList = (list, kind) => {
@@ -490,6 +558,7 @@
         const u0 = (al && al.unit) || 'month';
         let u = UNIT_LABEL[u0] || '每月固定';
         if (isD && u0 === 'once') u += '（' + ((al && al.appliedMonth) || '未设月份') + '）';
+        else if (isD && u0 === 'percent') u = '底薪的 ' + amt + '%';
         const pref = isD ? '-' : '';
         return '<div class="allow-item' + (isD ? ' deduct' : '') + '">' +
           '<div class="ai-info">' +
@@ -508,6 +577,28 @@
       return html || '<div class="empty-tip">' + (isD ? '暂无扣款项，如社保代扣、公积金' : '暂无补贴') + '</div>';
     };
 
+    /* 底薪调整记录列表渲染；记录可附带社保/公积金/个税覆盖（h.s/h.g/h.t） */
+    const renderLog = (log, def) => {
+      const arr = log || [];
+      return arr.map((h, i) => {
+        const ov = [];
+        if (Number(h.s) > 0) ov.push('社保¥' + Number(h.s));
+        if (Number(h.g) > 0) ov.push('公积金¥' + Number(h.g));
+        if (Number(h.t) > 0) ov.push('个税¥' + Number(h.t));
+        return '<div class="allow-item">' +
+          '<div class="ai-info">' +
+            '<div class="ai-name">' + esc(h.m) + ' 起</div>' +
+            '<div class="ai-amt">¥' + (Number(h.v) || 0) + '</div>' +
+            (ov.length ? '<div class="ai-ov">' + ov.join(' · ') + '</div>' : '') +
+          '</div>' +
+          '<div class="ai-ops">' +
+            '<button class="allow-op" data-bs-edit="' + i + '">编辑</button>' +
+            '<button class="allow-op del" data-bs-del="' + i + '">删除</button>' +
+          '</div>' +
+        '</div>';
+      }).join('') || '<div class="empty-tip">暂无调整记录，所有月份按默认底薪 ¥' + (Number(def) || 0) + '</div>';
+    };
+
     $('#appMain').innerHTML =
       '<div class="tab-panel">' +
 
@@ -517,6 +608,14 @@
             '<div>' + num('baseSalary', '底薪（元/月）', '不含加班费') + '</div>' +
             '<div>' + num('calcDays', '月计薪天数', '标准 21.75') + '</div>' +
             '<div>' + num('workHoursPerDay', '每日标准工时', '标准 8') + '</div>' +
+          '</div>' +
+          '<div class="base-effect">' +
+            '<span class="effect-date-label">新底薪生效月份（每月 1 号生效）</span>' +
+            '<button type="button" class="effect-date" id="baseEffectDate" data-effect-date data-value="' + effMonth + '">' + parseInt(effMonth.slice(0, 4), 10) + '年' + parseInt(effMonth.slice(5, 7), 10) + '月 ▾</button>' +
+            '<p class="effect-hint" id="effectHint"></p>' +
+            '<div class="bs-log-title">底薪调整记录</div>' +
+            '<div class="allow-list">' + renderLog(s.baseSalaryLog, s.baseSalary) + '</div>' +
+            '<button type="button" class="btn btn-primary save-settings-btn" data-save-settings>保存设置</button>' +
           '</div>' +
         '</div>' +
 
@@ -556,11 +655,27 @@
           '<div class="rule-box">' +
             '加班记 · 免费 · 无广告 · 无需联网<br/>' +
             '专为工厂上班族设计：记录每日工时与加班，自动计算月薪。<br/>' +
-            '把本页添加到手机桌面，即可像 App 一样使用。<br/>' +
             '工时与工资为估算，具体以工厂结算为准。' +
           '</div>' +
         '</div>' +
       '</div>';
+    updateEffectHint();
+  }
+
+  /* 更新底薪生效提示 */
+  function updateEffectHint() {
+    const hint = $('#effectHint');
+    if (!hint) return;
+    const inp = $('[data-set="baseSalary"]');
+    const newVal = inp ? (parseFloat(inp.value) || 0) : 0;
+    const settings = Store.getSettings();
+    const effInput = $('#baseEffectDate');
+    const effMonth = (effInput && effInput.dataset.value) || Store.toMonthStr(new Date());
+    const y = parseInt(effMonth.slice(0, 4), 10);
+    const mo = parseInt(effMonth.slice(5, 7), 10);
+    const prevMonth = mo === 1 ? (y - 1) + '-12' : y + '-' + String(mo - 1).padStart(2, '0');
+    const oldBase = Calc.baseSalaryFor(prevMonth, settings);
+    hint.textContent = '从 ' + effMonth + '-01 起按新底薪 ¥' + newVal + '；之前月份仍按 ¥' + oldBase + ' 计算。点击「保存设置」后生效。';
   }
 
   /* 打开补贴 / 扣款编辑弹窗（index 为 -1/undefined 时新增；kind: allowance | deduction） */
@@ -573,9 +688,10 @@
     { id: 'bonus', name: '全勤达标' },
     { id: 'month', name: '每月固定' }
   ];
-  /* 扣款计算方式：每月固定（每月都扣）| 仅当月（只在所选月份扣一次，如迟到罚款） */
+  /* 扣款计算方式：每月固定 | 按底薪比例 | 仅当月（只在所选月份扣一次，如迟到罚款） */
   const DEDUCT_UNIT_OPTIONS = [
     { id: 'month', name: '每月固定' },
+    { id: 'percent', name: '按底薪比例' },
     { id: 'once', name: '仅当月' }
   ];
   function openCaModal(index, kind) {
@@ -585,7 +701,7 @@
     const list = Store.getSettings()[isD ? 'deductions' : 'allowances'] || [];
     const ca = caEditingIndex >= 0 && caEditingIndex < list.length ? list[caEditingIndex] : null;
     let u0 = (ca && ca.unit) || 'month';
-    if (isD && u0 !== 'once') u0 = 'month';   // 扣款只允许 每月固定 / 仅当月
+    if (isD && u0 !== 'once' && u0 !== 'percent') u0 = 'month';   // 扣款支持 每月固定 / 按底薪比例 / 仅当月
     caEditingUnit = u0;
     const unitOptions = isD ? DEDUCT_UNIT_OPTIONS : UNIT_OPTIONS;
     const unitChips = unitOptions.map((u) =>
@@ -600,8 +716,8 @@
         '<input class="field-input" type="text" data-field="caName" placeholder="' + (isD ? '如：社保代扣、公积金' : '如：餐补、住房补贴') + '" value="' + esc((ca && ca.name) || '') + '" />' +
       '</div>' +
       '<div class="field-row">' +
-        '<label>' + (isD ? '扣款金额（元）' : '补贴金额（元）') + '</label>' +
-        '<input class="field-input" type="number" inputmode="decimal" step="0.01" min="0" data-field="caAmount" value="' + ((ca && Number(ca.amount)) || '') + '" placeholder="0 = 无" />' +
+        '<label id="caAmountLabel">' + (isD && caEditingUnit === 'percent' ? '扣款比例（%）' : (isD ? '扣款金额（元）' : '补贴金额（元）')) + '</label>' +
+        '<input class="field-input" type="number" inputmode="decimal" step="0.01" min="0" data-field="caAmount" value="' + ((ca && Number(ca.amount)) || '') + '" placeholder="' + (isD && caEditingUnit === 'percent' ? '如：10' : '0 = 无') + '" />' +
       '</div>' +
       '<div class="field-row" style="margin-bottom:0;">' +
         '<label>计算方式</label>' +
@@ -612,7 +728,7 @@
             '<label>生效月份（仅当月）</label>' +
             '<input class="field-input" type="month" data-field="caAppliedMonth" value="' + appliedMonth + '" />' +
           '</div>' +
-          '<div class="ca-hint">每月固定：每月都扣（如社保/公积金/个税）；仅当月：只在所选月份扣一次（如迟到罚款）。</div>'
+          '<div class="ca-hint">每月固定：每月都扣固定金额；按底薪比例：按当月底薪 × 比例扣（改底薪自动变化）；仅当月：只在所选月份扣一次（如迟到罚款）。</div>'
         : '') +
       '<div class="m-foot">' +
         '<button class="btn btn-ghost-2" data-close>取消</button>' +
@@ -622,9 +738,46 @@
     );
   }
 
+  /* 编辑底薪调整记录（可覆盖社保/公积金/个税金额，留空则沿用「扣款项」默认设置） */
+  let bsEditingIndex = -1;
+  function openBsEditModal(index) {
+    bsEditingIndex = (typeof index === 'number' && index >= 0) ? index : -1;
+    const settings = Store.getSettings();
+    const log = settings.baseSalaryLog || [];
+    const h = bsEditingIndex >= 0 && bsEditingIndex < log.length ? log[bsEditingIndex] : null;
+    const m0 = (h && h.m) || Store.toMonthStr(new Date());
+    const numField = (key, label) =>
+      '<div class="field-row">' +
+        '<label>' + label + '</label>' +
+        '<input class="field-input" type="number" inputmode="decimal" step="0.01" min="0" data-field="' + key + '" value="' + ((h && h[key]) != null ? h[key] : '') + '" placeholder="留空沿用默认扣款" />' +
+      '</div>';
+    openModal(
+      '<div class="m-title">编辑底薪调整<button class="m-close" data-close>✕</button></div>' +
+      '<div class="field-row">' +
+        '<label>生效月份（每月 1 号生效）</label>' +
+        '<button type="button" class="effect-date" id="bsMonthBtn" data-bs-month-open data-value="' + m0 + '">' + parseInt(m0.slice(0, 4), 10) + '年' + parseInt(m0.slice(5, 7), 10) + '月 ▾</button>' +
+        '<div class="bs-month-inline" id="bsMonthInline" hidden></div>' +
+      '</div>' +
+      '<div class="field-row">' +
+        '<label>底薪（元/月）</label>' +
+        '<input class="field-input" type="number" inputmode="decimal" step="0.01" min="0.01" data-field="bsV" value="' + ((h && h.v) != null ? h.v : '') + '" />' +
+      '</div>' +
+      numField('bsS', '社保（元）') +
+      numField('bsG', '公积金（元）') +
+      numField('bsT', '个人所得税（元）') +
+      '<div class="ca-hint">社保/公积金/个税留空或填 0 表示沿用「扣款项」的默认设置，该底薪段内每月生效。</div>' +
+      '<div class="m-foot">' +
+        '<button class="btn btn-ghost-2" data-close>取消</button>' +
+        '<button class="btn btn-primary" data-bs-save>保存</button>' +
+      '</div>',
+      true
+    );
+  }
+
   /* 各数值字段的最小值，防止 0/负数导致时薪为 0 或 Infinity */
   const SETTING_MIN = { baseSalary: 0.01, calcDays: 1, workHoursPerDay: 1, otRateWeekday: 1, otRateWeekend: 1, otRateHoliday: 1 };
   function saveSettingsFromForm() {
+    const settings = Store.getSettings();
     const s = {};
     $$('#appMain [data-set]').forEach((inp) => {
       let v = parseFloat(inp.value);
@@ -633,7 +786,21 @@
       if (min !== undefined && v < min) v = min;
       s[inp.dataset.set] = v;
     });
+    /* 记录当前生效月份（仅回显用） */
+    const effInput = $('#baseEffectDate');
+    const effMonth = (effInput && effInput.dataset.value) || Store.toMonthStr(new Date());
+    s.baseSalaryEffectDate = effMonth;
+    /* 底薪调整：把「新底薪 + 生效月份」写入调整记录；默认底薪 baseSalary 不被覆盖。
+       同值重复保存时保持原记录不变，避免误删 */
+    const newBase = s.baseSalary;
+    delete s.baseSalary;
+    if (newBase > 0 && newBase !== Calc.baseSalaryFor(effMonth, settings)) {
+      const log = (settings.baseSalaryLog || []).filter((h) => h && h.m < effMonth);
+      log.push({ m: effMonth, v: newBase });
+      s.baseSalaryLog = log;
+    }
     Store.setSettings(s);
+    render();
     toast('设置已保存');
   }
 
@@ -680,7 +847,9 @@
     days.forEach((d) => {
       const r = recs[d];
       const w = Number(r.workHours) || 0, o = Number(r.otHours) || 0, l = Number(r.leaveHours) || 0;
-      rows.push([d, TYPE[r.dayType] || r.dayType || '', SHIFT[r.shift] || r.shift || '',
+      let shiftLabel = SHIFT[r.shift] || r.shift || '';
+      if (l > 0 && r.shift !== 'leave') shiftLabel += '+请假';
+      rows.push([d, TYPE[r.dayType] || r.dayType || '', shiftLabel,
         w ? w : '', o ? o : '', l ? l : '', r.note || '']);
     });
     const csvEsc = (v) => { const s = String(v == null ? '' : v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
@@ -726,6 +895,7 @@
     if (state.tab === 'records') renderRecords();
     else if (state.tab === 'salary') renderSalary();
     else renderSettings();
+    updateFab();
   }
 
   const TAB_ORDER = ['records', 'salary', 'settings'];
@@ -768,6 +938,8 @@
       b.addEventListener('click', () => switchTab(b.dataset.tab));
     });
 
+    $('#fabToday').addEventListener('click', goToday);
+
     $('#modalMask').addEventListener('click', (e) => {
       if (e.target.id === 'modalMask') closeModal();
     });
@@ -775,19 +947,14 @@
     $('#appMain').addEventListener('click', (e) => {
       // 日历左右滑动切月后短暂抑制本次滑动触发的 click，避免误点日历格
       if (Date.now() < (window.__suppressClickUntil || 0)) return;
-      const el = e.target.closest('[data-open-day],[data-month-nav],[data-month-pick-open],[data-sal-nav],[data-go-today],[data-export-csv],[data-copy-summary],[data-export-all],[data-import-all],[data-clear-all],[data-ca-add],[data-ca-edit],[data-ca-del],[data-dc-add],[data-dc-edit],[data-dc-del]');
+      const el = e.target.closest('[data-open-day],[data-month-nav],[data-month-pick-open],[data-sal-nav],[data-go-today],[data-export-csv],[data-copy-summary],[data-export-all],[data-import-all],[data-clear-all],[data-ca-add],[data-ca-edit],[data-ca-del],[data-dc-add],[data-dc-edit],[data-dc-del],[data-save-settings],[data-bs-del],[data-bs-edit],[data-effect-date]');
       if (!el) return;
       handleClick(el, e);
     });
 
     $('#appMain').addEventListener('input', (e) => {
-      if (e.target.matches('[data-set]')) {
-        const keys = ['baseSalary', 'calcDays', 'workHoursPerDay', 'otRateWeekday', 'otRateWeekend', 'otRateHoliday'];
-        if (keys.indexOf(e.target.dataset.set) !== -1) {
-          clearTimeout(window.__setDebounce);
-          window.__setDebounce = setTimeout(saveSettingsFromForm, 500);
-        }
-      }
+      /* 设置页输入仅实时更新底薪生效提示，点击「保存设置」才落库 */
+      if (e.target.matches('[data-set]') && e.target.dataset.set === 'baseSalary') updateEffectHint();
     });
 
     $('#modalBox').addEventListener('click', (e) => {
@@ -809,23 +976,26 @@
         return;
       }
       if (e.target.closest('[data-year-back]')) { pickerMode = 'month'; renderMonthPicker(); return; }
-      if (e.target.closest('[data-month-today]')) { closeModal(); goToday(); return; }
+      if (e.target.closest('[data-month-today]')) {
+        if (pickerOnPick) { pickerOnPick(Store.toMonthStr(new Date())); closeModal(); return; }
+        closeModal(); goToday(); return;
+      }
       const monthPick = e.target.closest('[data-month-pick]');
       if (monthPick) {
-        if (state.tab === 'salary') state.salMonth = pickerYear + '-' + String(Number(monthPick.dataset.monthPick)).padStart(2, '0');
-        else { state.recMonth = pickerYear + '-' + String(Number(monthPick.dataset.monthPick)).padStart(2, '0'); state.selectedDay = ''; }
+        const m = pickerYear + '-' + String(Number(monthPick.dataset.monthPick)).padStart(2, '0');
+        if (pickerOnPick) { pickerOnPick(m); closeModal(); return; }
+        if (state.tab === 'salary') state.salMonth = m;
+        else { state.recMonth = m; state.selectedDay = ''; }
         closeModal();
         render();
         return;
       }
-      const step = e.target.closest('[data-step]');
-      if (step) {
-        const root = step.closest('.modal') || document;
-        const input = $('[data-field="' + step.dataset.step + '"]', root);
+      const setHour = e.target.closest('[data-set-hour]');
+      if (setHour) {
+        const root = setHour.closest('.modal') || document;
+        const input = $('[data-field="' + setHour.dataset.setHour + '"]', root);
         if (input) {
-          const cur = Number(input.value) || 0;
-          const next = cur + Number(step.dataset.delta);
-          input.value = next > 0 ? String(Math.round(next * 10) / 10) : '';
+          input.value = setHour.dataset.h;
           input.dispatchEvent(new Event('input', { bubbles: true }));
         }
         return;
@@ -837,8 +1007,46 @@
         // 扣款选"仅当月"时显示生效月份，选"每月固定"时隐藏
         const onceRow = $('#caOnceRow', $('#modalBox'));
         if (onceRow) onceRow.hidden = caEditingUnit !== 'once';
+        // 扣款选"按底薪比例"时金额字段变为百分比
+        if (caEditingKind === 'deduction') {
+          const lab = $('#caAmountLabel', $('#modalBox'));
+          const inp = $('[data-field="caAmount"]', $('#modalBox'));
+          if (lab) lab.textContent = caEditingUnit === 'percent' ? '扣款比例（%）' : '扣款金额（元）';
+          if (inp) inp.placeholder = caEditingUnit === 'percent' ? '如：10（底薪的 10%）' : '0 = 无';
+        }
         return;
       }
+      /* 底薪调整记录：内联展开月份网格（复用 .mp-grid/.mp-m 样式） */
+      const bsMonthOpen = e.target.closest('[data-bs-month-open]');
+      if (bsMonthOpen) {
+        const wrap = $('#bsMonthInline', $('#modalBox'));
+        if (!wrap) return;
+        if (!wrap.hidden) { wrap.hidden = true; return; }
+        const m0 = bsMonthOpen.dataset.value || Store.toMonthStr(new Date());
+        const cur = m0.slice(5, 7);
+        let cells = '';
+        for (let m = 1; m <= 12; m++) {
+          const ms = String(m).padStart(2, '0');
+          cells += '<button type="button" class="mp-m' + (ms === cur ? ' active' : '') + '" data-bs-month-pick="' + m + '">' + m + '月</button>';
+        }
+        wrap.hidden = false;
+        wrap.innerHTML = '<div class="mp-grid">' + cells + '</div>';
+        return;
+      }
+      const bsMonthPick = e.target.closest('[data-bs-month-pick]');
+      if (bsMonthPick) {
+        const mBox = $('#modalBox');
+        const btn = $('#bsMonthBtn', mBox);
+        if (btn && btn.dataset.value) {
+          const m = btn.dataset.value.slice(0, 4) + '-' + String(Number(bsMonthPick.dataset.bsMonthPick)).padStart(2, '0');
+          btn.dataset.value = m;
+          btn.textContent = parseInt(m.slice(0, 4), 10) + '年' + parseInt(m.slice(5, 7), 10) + '月 ▾';
+        }
+        const wrap = $('#bsMonthInline', mBox);
+        if (wrap) wrap.hidden = true;
+        return;
+      }
+
       const caSave = e.target.closest('[data-ca-save]');
       if (caSave) {
         const name = $('[data-field="caName"]', $('#modalBox')).value.trim();
@@ -861,36 +1069,104 @@
         toast(isD ? '扣款已保存' : '补贴已保存');
         return;
       }
-      const el = e.target.closest('[data-shift],[data-daytype],[data-save],[data-del-day]');
+      const bsSave = e.target.closest('[data-bs-save]');
+      if (bsSave) {
+        const mBox = $('#modalBox');
+        const mBtn = $('[data-bs-month-open]', mBox);
+        const month = (mBtn && mBtn.dataset.value) || '';
+        const v = parseFloat($('[data-field="bsV"]', mBox).value);
+        if (!month || !(v > 0)) { toast('请填写生效月份与底薪'); return; }
+        const read = (k) => { const x = parseFloat($('[data-field="bs' + k + '"]', mBox).value); return !isNaN(x) && x > 0 ? x : undefined; };
+        const s = read('S'), g = read('G'), t = read('T');
+        const log = (Store.getSettings().baseSalaryLog || []).slice();
+        if (bsEditingIndex >= 0 && bsEditingIndex < log.length) {
+          const nh = { m: month, v: v };
+          if (s !== undefined) nh.s = s;
+          if (g !== undefined) nh.g = g;
+          if (t !== undefined) nh.t = t;
+          log[bsEditingIndex] = nh;
+          log.sort((a, b) => (a.m < b.m ? -1 : a.m > b.m ? 1 : 0));
+          Store.setSettings({ baseSalaryLog: log });
+          bsEditingIndex = -1;
+          closeModal();
+          renderSettings();
+          toast('已更新底薪调整记录');
+        }
+        return;
+      }
+      const el = e.target.closest('[data-shift],[data-daytype],[data-work-tab],[data-save],[data-del-day],[data-effect-date]');
       if (!el) return;
       handleClick(el, e);
     });
     $('#modalBox').addEventListener('input', (e) => {
-      if (e.target.matches('[data-field="leaveHours"]')) {
-        syncLeaveState(e.target.closest('.modal') || document);
+      if (e.target.matches('[data-field]')) {
+        updateHsel(e.target.closest('.modal') || document);
+        if (e.target.matches('[data-field="leaveHours"], [data-field="otHours"]')) {
+          syncLeaveState(e.target.closest('.modal') || document);
+        }
       }
     });
   }
 
-  /* 请假小时 > 0 即视为请假：隐藏工时输入、切换提示文案 */
+  /* 小时选择器显示同步：大数字与快捷值高亮和隐藏输入框保持一致 */
+  function updateHsel(root) {
+    $$('.hsel', root).forEach((box) => {
+      const input = $('[data-field]', box);
+      if (!input) return;
+      const v = Number(input.value) || 0;
+      const b = box.querySelector('[data-hsel-val]');
+      if (b) b.textContent = v > 0 ? String(Math.round(v * 10) / 10) : '0';
+      $$('.hchip', box).forEach((c) => {
+        c.classList.toggle('active', Math.abs((Number(c.dataset.h) || 0) - v) < 0.001);
+      });
+    });
+  }
+
+  /* 请假/加班 Tab 与提示同步：加班与请假可同时存在，Tab 切换只换视图、不清空数据 */
   function syncLeaveState(root) {
     const shiftBtn = $('[data-shift].active', root);
     const shift = shiftBtn ? shiftBtn.dataset.shift : 'day';
-    const lh = Number($('[data-field="leaveHours"]', root).value) || 0;
-    const isLeave = lh > 0;
-    const noWork = shift === 'rest' || isLeave;
-    const grid = $('#hourGrid', root);
-    if (grid) grid.classList.toggle('hidden', noWork);
+    const tabs = $('#workTabs', root);
+    const otArea = $('#otArea', root);
+    const leaveArea = $('#leaveArea', root);
     const tip = $('#restTip', root);
-    if (tip) {
-      tip.classList.toggle('hidden', !noWork);
-      if (noWork) {
-        const w = Math.max(0, Store.getSettings().workHoursPerDay);
-        tip.textContent = isLeave
-          ? '今日请假，不计算工时与出勤；请假按小时扣款，满 ' + w + ' 小时算一天，零头按小时扣'
-          : '今日休息，不计算工时与出勤';
+    const w = Math.max(0, Store.getSettings().workHoursPerDay);
+    const leaveInput = $('[data-field="leaveHours"]', root);
+    const lh = leaveInput ? (Number(leaveInput.value) || 0) : 0;
+    // 请假满每日标准工时 = 全天请假，隐藏加班入口
+    const fullLeave = w > 0 && lh >= w;
+
+    // 休息：隐藏 Tab 与两个输入区，只显示休息提示
+    if (shift === 'rest') {
+      if (tabs) tabs.classList.add('hidden');
+      if (otArea) otArea.classList.add('hidden');
+      if (leaveArea) leaveArea.classList.add('hidden');
+      if (tip) {
+        tip.classList.remove('hidden');
+        tip.textContent = '今日休息，不计算工时与出勤';
       }
+      return;
     }
+
+    // 全天请假（请假满每日标准工时）：隐藏加班 Tab 与加班区，只显示请假区与提示
+    if (shift === 'leave' || fullLeave) {
+      if (tabs) tabs.classList.add('hidden');
+      if (otArea) otArea.classList.add('hidden');
+      if (leaveArea) leaveArea.classList.remove('hidden');
+      if (tip) {
+        tip.classList.remove('hidden');
+        tip.textContent = '已请假满 ' + w + ' 小时（全天请假），不计算工时与加班；请假扣款满 ' + w + ' 小时按一天计';
+      }
+      return;
+    }
+
+    // 白班/夜班：加班与请假可并存，按当前激活 Tab 显示对应输入区
+    if (tabs) tabs.classList.remove('hidden');
+    if (tip) tip.classList.add('hidden');
+    const tabBtn = $('[data-work-tab].active', root);
+    const tab = tabBtn ? tabBtn.dataset.workTab : 'ot';
+    if (otArea) otArea.classList.toggle('hidden', tab !== 'ot');
+    if (leaveArea) leaveArea.classList.toggle('hidden', tab !== 'leave');
   }
 
   function handleClick(el, e) {
@@ -900,11 +1176,13 @@
     if (el.dataset.shift) {
       $$('[data-shift]', root).forEach((b) => b.classList.remove('active'));
       el.classList.add('active');
-      // 请假与上班/休息互斥：切到其他班次时清空请假小时，避免残留值遮挡工时输入
-      if (el.dataset.shift !== 'leave') {
-        const lh = $('[data-field="leaveHours"]', root);
-        if (lh) lh.value = '';
-      }
+      // 班次只切换状态，不清空已填的加班/请假小时（加班与请假可并存）
+      syncLeaveState(root);
+      return;
+    }
+    if (el.dataset.workTab) {
+      // Tab 只切换视图、不清空另一侧数据：加班与请假可同时存在（如上午请假2h + 晚上加班2h）
+      $$('[data-work-tab]', root).forEach((b) => b.classList.toggle('active', b.dataset.workTab === el.dataset.workTab));
       syncLeaveState(root);
       return;
     }
@@ -953,6 +1231,39 @@
     if (el.dataset.salNav) { state.salMonth = shiftMonth(state.salMonth, parseInt(el.dataset.salNav, 10)); renderSalary(); return; }
 
     if (el.hasAttribute('data-go-today')) { goToday(); return; }
+
+    if (el.hasAttribute('data-save-settings')) { saveSettingsFromForm(); return; }
+
+    if (el.hasAttribute('data-effect-date')) {
+      const btn = el;
+      openMonthPicker(btn.dataset.value || Store.toMonthStr(new Date()), (m) => {
+        btn.dataset.value = m;
+        btn.textContent = parseInt(m.slice(0, 4), 10) + '年' + parseInt(m.slice(5, 7), 10) + '月 ▾';
+        if (btn.id === 'baseEffectDate') updateEffectHint();
+      });
+      return;
+    }
+
+    if (el.hasAttribute('data-bs-edit')) { openBsEditModal(parseInt(el.dataset.bsEdit, 10)); return; }
+
+    if (el.hasAttribute('data-bs-del')) {
+      const i = parseInt(el.dataset.bsDel, 10);
+      const settings = Store.getSettings();
+      const log = settings.baseSalaryLog || [];
+      const h = log[i];
+      if (h) {
+        confirmModal('确定删除「' + h.m + ' 起 ¥' + (Number(h.v) || 0) + '」这条底薪调整记录吗？删除后该月及之后将按前一条记录（或默认底薪）计算，社保/公积金/个税覆盖值同步回退。', '删除', () => {
+          const next = (Store.getSettings().baseSalaryLog || []).slice();
+          if (i < next.length) {
+            next.splice(i, 1);
+            Store.setSettings({ baseSalaryLog: next });
+            render();
+            toast('已删除该底薪调整');
+          }
+        }, true);
+      }
+      return;
+    }
 
     if (el.hasAttribute('data-export-csv')) { exportCsv(); return; }
     if (el.hasAttribute('data-copy-summary')) { copySummary(); return; }

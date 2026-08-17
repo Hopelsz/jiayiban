@@ -14,5 +14,8 @@
     "@capacitor/android": "^8.5.0",
     "@capacitor/cli": "^8.5.0",
     "@capacitor/core": "^8.5.0"
+  },
+  "dependencies": {
+    "graceful-fs": "^4.2.11"
   }
 }
